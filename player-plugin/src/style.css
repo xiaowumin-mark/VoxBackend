@@ -1,0 +1,13 @@
+.apple-music-sing-control {
+    position: absolute;
+    top: 10%;
+    right: 10%;
+    /* 使用 em，你可以通过改这里的 font-size 整体缩放 */
+    width: 10em;
+    height: 10em;
+    overflow: hidden;
+    transform-origin: top right;
+    mask-image: paint(smooth-corners);
+    --smooth-corners: 2, 2;
+    /* 可调整的圆角参数 */
+}

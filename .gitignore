@@ -1,0 +1,15 @@
+*.onnx
+*.exe
+*.wav
+
+/onnx
+/testfiles
+/onnxruntime
+/node_modules
+/build
+/dist
+/.vscode
+/.git
+/.idea
+/.vscode-test
+/player-plugin/node_modules
