@@ -45,7 +45,7 @@ func (m *MidSide) SetSideGain(g float64) {
 }
 
 func (m *MidSide) SetIntensity(intensity float64) {
-	intensity = clamp(intensity, 0, 1)
+	intensity = clamp(intensity, 0, 1.5)
 	side := 1.0 + intensity*(m.presetSideGain-1.0)
 	m.SetSideGain(side)
 }

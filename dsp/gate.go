@@ -41,7 +41,7 @@ func (g *Gate) ThresholdDB() float64 {
 }
 
 func (g *Gate) SetIntensity(intensity float64) {
-	intensity = clamp(intensity, 0, 1)
+	intensity = clamp(intensity, 0, 1.5)
 	off := -60.0
 	db := off + intensity*(g.presetThresholdDB-off)
 	g.SetThresholdDB(db)

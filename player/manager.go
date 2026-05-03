@@ -3,6 +3,7 @@ package player
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -100,6 +101,9 @@ type PlaylistManager struct {
 
 	nextCrossfadeConsumed int64
 
+	sharedVocalSession *separator.SharedONNXSession
+	sharedOtherSession *separator.SharedONNXSession
+
 	cmdCh      chan PlayerCmd
 	lastSwitch time.Time
 	cmdMu      sync.Mutex
@@ -137,6 +141,37 @@ func (pm *PlaylistManager) Start() error {
 		return nil
 	}
 	return pm.loadFirstTrack()
+}
+
+func (pm *PlaylistManager) ensureSharedSessions() error {
+	if pm.sharedVocalSession != nil {
+		return nil
+	}
+	if pm.cfg.ONNX.RuntimeLibraryPath != "" {
+		if err := separator.InitONNXRuntime(pm.cfg.ONNX.RuntimeLibraryPath); err != nil {
+			return err
+		}
+	}
+	profile, err := separator.ParseONNXProfile(pm.cfg.ONNX.Profile)
+	if err != nil {
+		return err
+	}
+	shared, err := separator.LoadSharedONNXSession(pm.cfg.ONNX.ModelPath, profile)
+	if err != nil {
+		return err
+	}
+	pm.sharedVocalSession = shared
+
+	if !profile.UseComplex4 && pm.cfg.ONNX.OtherModelPath != "" {
+		if _, statErr := os.Stat(pm.cfg.ONNX.OtherModelPath); statErr == nil {
+			other, otherErr := separator.LoadSharedONNXSession(pm.cfg.ONNX.OtherModelPath, profile)
+			if otherErr != nil {
+				return otherErr
+			}
+			pm.sharedOtherSession = other
+		}
+	}
+	return nil
 }
 
 func (pm *PlaylistManager) effectivePrewarmSamples() int64 {
@@ -178,7 +213,7 @@ func (pm *PlaylistManager) createBundle(index int, reason string) (*PipelineBund
 		return nil, err
 	}
 
-	ringCapacity := maxInt(2*ChunkSize*BufferChunks, 2*(PrefillTargetSamples(sep)+4*ChunkSize))
+	ringCapacity := maxInt(2*ChunkSize*BufferChunks, 2*(PrefillTargetSamples(sep)+4*ChunkSize)+2*int(pm.crossfadeSamples))
 	ring := audio.NewRing(ringCapacity)
 	mixer := audio.NewMixer(pm.cfg.VocalGain, pm.cfg.MasterVolume, int(playbackRate), float64(pm.cfg.VocalGainRamp)/float64(time.Millisecond))
 	pipeline := NewPipeline(streamer, streamer, sep, ring, format.SampleRate, playbackRate)
@@ -244,7 +279,10 @@ func (pm *PlaylistManager) newSeparator(sampleRate int) (separator.Separator, er
 		if sampleRate != profile.SampleRate {
 			return nil, fmt.Errorf("onnx(%s) 要求输入采样率 %d Hz，当前是 %d Hz", profile.Name, profile.SampleRate, sampleRate)
 		}
-		return separator.NewONNX(pm.cfg.ONNX)
+		if err := pm.ensureSharedSessions(); err != nil {
+			return nil, err
+		}
+		return separator.NewONNXWithShared(pm.cfg.ONNX, pm.sharedVocalSession, pm.sharedOtherSession)
 	default:
 		return nil, fmt.Errorf("未知分离器类型 %q", pm.cfg.SeparatorMode)
 	}
@@ -317,6 +355,7 @@ func (pm *PlaylistManager) deliverNext(result bundleResult) {
 		if result.bundle != nil {
 			result.bundle.Close()
 		}
+		pm.loadingNext.Store(false)
 	}
 }
 
@@ -339,11 +378,9 @@ func isSwitchCmd(t PlaylistCmd) bool {
 }
 
 func (pm *PlaylistManager) AddTracks(tracks []Track) {
-	for _, t := range tracks {
-		select {
-		case pm.cmdCh <- PlayerCmd{Type: CmdAddTracks, Tracks: []Track{t}}:
-		default:
-		}
+	select {
+	case pm.cmdCh <- PlayerCmd{Type: CmdAddTracks, Tracks: tracks}:
+	default:
 	}
 }
 
@@ -441,6 +478,7 @@ func (pm *PlaylistManager) Stream(dst [][2]float64) (int, bool) {
 		!pm.isCrossfading &&
 		!pm.forceHardCut &&
 		!pm.loadingNext.Load() &&
+		pm.next == nil &&
 		pm.pendingHardCutIdx < 0 {
 		prewarm := pm.effectivePrewarmSamples()
 		triggerPoint := pm.current.totalSample - pm.crossfadeSamples - prewarm
@@ -1000,6 +1038,14 @@ func (pm *PlaylistManager) Stop() {
 		pm.next = nil
 	}
 	pm.drainReadyChannelsLocked()
+	if pm.sharedVocalSession != nil {
+		_ = pm.sharedVocalSession.Destroy()
+		pm.sharedVocalSession = nil
+	}
+	if pm.sharedOtherSession != nil {
+		_ = pm.sharedOtherSession.Destroy()
+		pm.sharedOtherSession = nil
+	}
 }
 
 func (pm *PlaylistManager) Snapshot(paused bool) State {

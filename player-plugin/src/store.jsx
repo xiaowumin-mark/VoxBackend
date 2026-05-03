@@ -1,5 +1,13 @@
-const {atom} = Jotai;
+const { atom } = Jotai;
 
 export const VoxBackendStates = {
-    Volume: atom(1),
+    VocalGain: atom(1),
+    MasterVolume: atom(1),
+    ShowEleInPlayer: atom(true),
+    VocalGainRamp: atom(1000), //ms
+    Crossfade: atom(12), //s
+    DSPMode : atom('auto'), // auto, on, off
+    Crossfadeing : atom(false),
+
+    WsIsConect : atom(false),
 }

@@ -17,7 +17,7 @@ const (
 	DefaultPrewarm        = 6 * time.Second
 	DefaultMasterVolume   = 1.0
 	DefaultVocalGain      = 1.0
-	DefaultVocalRamp      = 20 * time.Millisecond
+	DefaultVocalRamp      = 1000 * time.Millisecond
 	DefaultStateFrameRate = 60
 )
 

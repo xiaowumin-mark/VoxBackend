@@ -5,7 +5,7 @@ import "github.com/xiaowumin-mark/VoxBackend/audio"
 func computeResidualMask(magnitudes, vocalMasked []float32) []float32 {
 	out := make([]float32, len(magnitudes))
 	for i := range magnitudes {
-		out[i] = magnitudes[i] - vocalMasked[i]
+		out[i] = max(0, magnitudes[i]-vocalMasked[i]*1.5)
 		if out[i] < 0 {
 			out[i] = 0
 		}

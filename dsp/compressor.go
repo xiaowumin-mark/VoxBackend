@@ -59,7 +59,7 @@ func (c *Compressor) ratio() float64 {
 }
 
 func (c *Compressor) SetIntensity(intensity float64) {
-	intensity = clamp(intensity, 0, 1)
+	intensity = clamp(intensity, 0, 1.5)
 	c.SetThresholdDB(intensity * c.presetThresholdDB)
 	c.SetRatio(1 + intensity*(c.presetRatio-1))
 	c.SetMakeupGainDB(intensity * c.presetMakeupGainDB)

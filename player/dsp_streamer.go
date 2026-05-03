@@ -114,8 +114,8 @@ func (s *dspStreamer) OnVocalGainChanged(gain float64) {
 	if intensity < 0 {
 		intensity = 0
 	}
-	if intensity > 1 {
-		intensity = 1
+	if intensity > 1.5 {
+		intensity = 1.5
 	}
 
 	targetBypassed := intensity < 0.05

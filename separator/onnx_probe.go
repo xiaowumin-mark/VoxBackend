@@ -30,7 +30,7 @@ func ProbeONNXModel(cfg ONNXProbeConfig) error {
 		return err
 	}
 
-	if err := initializeONNXRuntime(cfg.RuntimeLibraryPath); err != nil {
+	if err := InitONNXRuntime(cfg.RuntimeLibraryPath); err != nil {
 		return err
 	}
 

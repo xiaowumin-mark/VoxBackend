@@ -51,7 +51,7 @@ func (s *Saturator) mix() float64 {
 }
 
 func (s *Saturator) SetIntensity(intensity float64) {
-	intensity = clamp(intensity, 0, 1)
+	intensity = clamp(intensity, 0, 1.5)
 	s.SetDrive(intensity * s.presetDrive)
 	s.SetMix(intensity * s.presetMix)
 }

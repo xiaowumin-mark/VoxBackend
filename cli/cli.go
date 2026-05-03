@@ -88,7 +88,7 @@ func parseConfig(args []string) (player.Config, string, bool, int, error) {
 	fs.Float64Var(&cfg.FakeVocalAmount, "fake-vocal-amount", cfg.FakeVocalAmount, "fake 分离器的人声占比")
 	fs.Float64Var(&cfg.FakeAccompBleed, "accomp-bleed", cfg.FakeAccompBleed, "fake 分离器伴奏扣减强度")
 	fs.IntVar(&cfg.AILatency, "ai-latency-samples", cfg.AILatency, "fake 分离器延迟（采样点）")
-	fs.StringVar(&cfg.ONNX.Profile, "onnx-profile", cfg.ONNX.Profile, "onnx 模型配置：umx-vocals / mdx-inst-hq3 / mdx23c-vocals / mdx-voc-ft")
+	fs.StringVar(&cfg.ONNX.Profile, "onnx-profile", cfg.ONNX.Profile, "onnx 模型配置：umx-vocals / mdx-inst-hq3 / mdx23c-vocals / mdx-voc-ft / mdx-kara / mdx-kara2")
 	fs.IntVar(&cfg.ONNX.StepFrames, "onnx-step-frames", cfg.ONNX.StepFrames, "onnx 重叠窗口步进帧数，0 表示按配置自动选择")
 	fs.Float64Var(&cfg.ONNX.Compensation, "onnx-compensation", cfg.ONNX.Compensation, "onnx 补偿系数，0 表示使用配置默认值")
 	fs.BoolVar(&probeONNX, "probe-onnx", false, "仅运行一次 onnx 探测后退出")

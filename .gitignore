@@ -1,15 +1,17 @@
 *.onnx
 *.exe
 *.wav
+AGENTS.md
 
 /onnx
 /testfiles
 /onnxruntime
 /node_modules
-/build
+/buildlist
 /dist
 /.vscode
 /.git
 /.idea
 /.vscode-test
 /player-plugin/node_modules
+/ref

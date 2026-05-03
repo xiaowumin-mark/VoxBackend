@@ -23,6 +23,8 @@ const (
 	MDXInstHQ3Profile       = "mdx-inst-hq3"
 	MDXVocFTProfile         = "mdx-voc-ft"
 	MDX23CVocalsProfile     = "mdx23c-vocals"
+	MDXKaraProfile          = "mdx-kara"
+	MDXKara2Profile         = "mdx-kara2"
 )
 
 type StemTarget int
@@ -77,11 +79,11 @@ var (
 		Frames:            256,
 		Channels:          4,
 		OutputStemCount:   1,
-		DefaultStepFrames: 192,
+		DefaultStepFrames: 210,
 		UseComplex4:       true,
 		PrimaryStem:       StemAccompaniment,
 		PrimaryStemIndex:  0,
-		Compensation:      1.022,
+		Compensation:      1.0,
 		BoundaryFade:      4096,
 		LowLatencyPrefill: false,
 	}
@@ -111,11 +113,45 @@ var (
 		Frames:            256,
 		Channels:          4,
 		OutputStemCount:   1,
-		DefaultStepFrames: 192,
+		DefaultStepFrames: 210,
 		UseComplex4:       true,
 		PrimaryStem:       StemVocals,
 		PrimaryStemIndex:  0,
-		Compensation:      1.022,
+		Compensation:      1.0,
+		BoundaryFade:      4096,
+		LowLatencyPrefill: false,
+	}
+	mdxKara = ONNXModelProfile{
+		Name:              MDXKaraProfile,
+		SampleRate:        ONNXSampleRate,
+		FFTSize:           4096,
+		HopSize:           1024,
+		FreqBins:          2048,
+		Frames:            256,
+		Channels:          4,
+		OutputStemCount:   1,
+		DefaultStepFrames: 210,
+		UseComplex4:       true,
+		PrimaryStem:       StemVocals,
+		PrimaryStemIndex:  0,
+		Compensation:      1.0,
+		BoundaryFade:      4096,
+		LowLatencyPrefill: false,
+	}
+	mdxKara2 = ONNXModelProfile{
+		Name:              MDXKara2Profile,
+		SampleRate:        ONNXSampleRate,
+		FFTSize:           4096,
+		HopSize:           1024,
+		FreqBins:          2048,
+		Frames:            256,
+		Channels:          4,
+		OutputStemCount:   1,
+		DefaultStepFrames: 210,
+		UseComplex4:       true,
+		PrimaryStem:       StemAccompaniment,
+		PrimaryStemIndex:  0,
+		Compensation:      1.065,
 		BoundaryFade:      4096,
 		LowLatencyPrefill: false,
 	}
@@ -132,9 +168,13 @@ func ParseONNXProfile(name string) (ONNXModelProfile, error) {
 		return mdxInstHQ3, nil
 	case "mdx23c", "mdx23c-vocals", "zfturbo-mdx23c-vocals":
 		return mdx23cVocals, nil
+	case "mdx-kara", "uvr-mdxnet-kara":
+		return mdxKara, nil
+	case "mdx-kara2", "uvr-mdxnet-kara2":
+		return mdxKara2, nil
 	default:
 		return ONNXModelProfile{}, fmt.Errorf(
-			"未知 ONNX 模型配置 %q，可选：umx-vocals、mdx-inst-hq3、mdx23c-vocals、mdx-voc-ft", name,
+			"未知 ONNX 模型配置 %q，可选：umx-vocals、mdx-inst-hq3、mdx23c-vocals、mdx-voc-ft、mdx-kara、mdx-kara2", name,
 		)
 	}
 }
@@ -157,9 +197,19 @@ type onnxModel struct {
 	path         string
 	inputName    string
 	outputName   string
-	session      *ort.AdvancedSession
+	shared       *SharedONNXSession
 	inputTensor  *ort.Tensor[float32]
 	outputTensor *ort.Tensor[float32]
+}
+
+type SharedONNXSession struct {
+	session     *ort.DynamicAdvancedSession
+	inputShape  ort.Shape
+	outputShape ort.Shape
+	inputName   string
+	outputName  string
+	profile     ONNXModelProfile
+	modelPath   string
 }
 
 type ONNX struct {
@@ -167,6 +217,8 @@ type ONNX struct {
 	vocalModel *onnxModel
 	otherModel *onnxModel
 	stft       *STFTProcessor
+
+	ownsSharedSessions bool
 
 	pending     []audio.Sample
 	vocalsQueue []audio.Sample
@@ -214,11 +266,11 @@ func NewONNX(cfg ONNXConfig) (*ONNX, error) {
 	if stepFrames > profile.Frames {
 		return nil, fmt.Errorf("ONNX 步进帧数 %d 超过窗口帧数 %d", stepFrames, profile.Frames)
 	}
-	if err := initializeONNXRuntime(cfg.RuntimeLibraryPath); err != nil {
+	if err := InitONNXRuntime(cfg.RuntimeLibraryPath); err != nil {
 		return nil, err
 	}
 
-	mainModel, err := loadONNXModel(cfg.ModelPath, profile)
+	mainModel, err := loadONNXModelFull(cfg.ModelPath, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +278,7 @@ func NewONNX(cfg ONNXConfig) (*ONNX, error) {
 	var otherModel *onnxModel
 	if !profile.UseComplex4 && cfg.OtherModelPath != "" {
 		if _, statErr := os.Stat(cfg.OtherModelPath); statErr == nil {
-			otherModel, err = loadONNXModel(cfg.OtherModelPath, profile)
+			otherModel, err = loadONNXModelFull(cfg.OtherModelPath, profile)
 			if err != nil {
 				_ = mainModel.Destroy()
 				return nil, err
@@ -236,6 +288,60 @@ func NewONNX(cfg ONNXConfig) (*ONNX, error) {
 		}
 	} else if profile.UseComplex4 && cfg.OtherModelPath != "" {
 		log.Printf("提示：当前配置为复频谱模型，忽略 -onnx-other-model 参数")
+	}
+
+	compensation := profile.Compensation
+	if cfg.Compensation > 0 {
+		compensation = cfg.Compensation
+	}
+
+	stft := NewSTFTProcessor(profile.FFTSize, profile.HopSize)
+	s := &ONNX{
+		profile:              profile,
+		vocalModel:           mainModel,
+		otherModel:           otherModel,
+		stft:                 stft,
+		ownsSharedSessions:   true,
+		windowSize:           stft.WindowSamples(profile.Frames),
+		stepSamples:          stepFrames * profile.HopSize,
+		fallbackBlendSamples: maxInt(profile.HopSize, 512),
+		warmupReady:          make(chan struct{}),
+	}
+	s.SetCompensation(compensation)
+	return s, nil
+}
+
+func NewONNXWithShared(cfg ONNXConfig, sharedVocal, sharedOther *SharedONNXSession) (*ONNX, error) {
+	profile, err := ParseONNXProfile(cfg.Profile)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.RuntimeLibraryPath != "" {
+		if err := InitONNXRuntime(cfg.RuntimeLibraryPath); err != nil {
+			return nil, err
+		}
+	}
+	if sharedVocal == nil {
+		return nil, errors.New("共享人声 session 不能为空")
+	}
+
+	stepFrames := cfg.StepFrames
+	if stepFrames <= 0 {
+		stepFrames = profile.DefaultStepFrames
+	}
+
+	mainModel, err := newONNXModelFromShared(sharedVocal)
+	if err != nil {
+		return nil, err
+	}
+
+	var otherModel *onnxModel
+	if sharedOther != nil {
+		otherModel, err = newONNXModelFromShared(sharedOther)
+		if err != nil {
+			_ = mainModel.Destroy()
+			return nil, err
+		}
 	}
 
 	compensation := profile.Compensation
@@ -407,11 +513,21 @@ func (s *ONNX) Drain(dst *Chunk, maxSamples int) (int, error) {
 func (s *ONNX) Close() error {
 	var firstErr error
 	if s.vocalModel != nil {
+		if s.ownsSharedSessions && s.vocalModel.shared != nil {
+			if err := s.vocalModel.shared.Destroy(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
 		if err := s.vocalModel.Destroy(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 	if s.otherModel != nil {
+		if s.ownsSharedSessions && s.otherModel.shared != nil {
+			if err := s.otherModel.shared.Destroy(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
 		if err := s.otherModel.Destroy(); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -471,6 +587,8 @@ func (s *ONNX) separateWindowComplex(segment []audio.Sample) ([]audio.Sample, []
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("运行 MDX ONNX 模型失败: %w", err)
 	}
+	rawEstimated := make([]float32, len(estimated))
+	copy(rawEstimated, estimated)
 	if comp := s.compensation(); comp != 1.0 {
 		scale := float32(comp)
 		for i := range estimated {
@@ -491,6 +609,40 @@ func (s *ONNX) separateWindowComplex(segment []audio.Sample) ([]audio.Sample, []
 		if err != nil {
 			return nil, nil, nil, err
 		}
+
+		secondaryIdx := 1 - s.profile.PrimaryStemIndex
+		secondaryComplex, err := selectComplexStem(
+			estimated,
+			s.profile.OutputStemCount,
+			secondaryIdx,
+			s.profile.Channels,
+			s.profile.FreqBins,
+			s.profile.Frames,
+		)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		if s.profile.PrimaryStem == StemVocals {
+			vocals, norm, err := s.stft.DecodeStereoComplex4(primaryComplex, s.profile.Frames, s.profile.FreqBins)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			accomp, _, err := s.stft.DecodeStereoComplex4(secondaryComplex, s.profile.Frames, s.profile.FreqBins)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			return vocals, accomp, norm, nil
+		}
+		accomp, norm, err := s.stft.DecodeStereoComplex4(primaryComplex, s.profile.Frames, s.profile.FreqBins)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		vocals, _, err := s.stft.DecodeStereoComplex4(secondaryComplex, s.profile.Frames, s.profile.FreqBins)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return vocals, accomp, norm, nil
 	}
 
 	primary, norm, err := s.stft.DecodeStereoComplex4(primaryComplex, s.profile.Frames, s.profile.FreqBins)
@@ -498,11 +650,19 @@ func (s *ONNX) separateWindowComplex(segment []audio.Sample) ([]audio.Sample, []
 		return nil, nil, nil, err
 	}
 
-	if s.profile.PrimaryStem == StemVocals {
-		return primary, subtractSamples(segment, primary), norm, nil
+	residualComplex := make([]float32, len(features))
+	for i := range features {
+		residualComplex[i] = features[i] - rawEstimated[i]
 	}
-	accomp := primary
-	return subtractSamples(segment, accomp), accomp, norm, nil
+	secondary, _, err := s.stft.DecodeStereoComplex4(residualComplex, s.profile.Frames, s.profile.FreqBins)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	if s.profile.PrimaryStem == StemVocals {
+		return primary, secondary, norm, nil
+	}
+	return secondary, primary, norm, nil
 }
 
 func selectComplexStem(features []float32, stemCount, stemIndex, channels, freqBins, frames int) ([]float32, error) {
@@ -582,7 +742,7 @@ func (s *ONNX) alignQueueToOutputTimeline() {
 	s.timelineAligned = true
 }
 
-func initializeONNXRuntime(runtimeLibraryPath string) error {
+func InitONNXRuntime(runtimeLibraryPath string) error {
 	ortInitOnce.Do(func() {
 		ort.SetSharedLibraryPath(runtimeLibraryPath)
 		ortInitErr = ort.InitializeEnvironment()
@@ -593,7 +753,7 @@ func initializeONNXRuntime(runtimeLibraryPath string) error {
 	return nil
 }
 
-func loadONNXModel(modelPath string, profile ONNXModelProfile) (*onnxModel, error) {
+func LoadSharedONNXSession(modelPath string, profile ONNXModelProfile) (*SharedONNXSession, error) {
 	inputs, outputs, err := ort.GetInputOutputInfo(modelPath)
 	if err != nil {
 		return nil, fmt.Errorf("读取 ONNX 输入输出信息失败: %w", err)
@@ -611,32 +771,86 @@ func loadONNXModel(modelPath string, profile ONNXModelProfile) (*onnxModel, erro
 		return nil, fmt.Errorf("解析 ONNX 输出形状失败: %w", err)
 	}
 
-	inputTensor, err := ort.NewEmptyTensor[float32](inputShape)
+	options, err := buildSessionOptions()
+	if err != nil {
+		return nil, err
+	}
+	defer options.Destroy()
+
+	session, err := ort.NewDynamicAdvancedSession(
+		modelPath,
+		[]string{inputs[0].Name},
+		[]string{outputs[0].Name},
+		options,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("创建 ONNX Dynamic Session 失败: %w", err)
+	}
+
+	return &SharedONNXSession{
+		session:     session,
+		inputShape:  inputShape,
+		outputShape: outputShape,
+		inputName:   inputs[0].Name,
+		outputName:  outputs[0].Name,
+		profile:     profile,
+		modelPath:   modelPath,
+	}, nil
+}
+
+func (s *SharedONNXSession) Destroy() error {
+	if s.session != nil {
+		return s.session.Destroy()
+	}
+	return nil
+}
+
+func newONNXModelFromShared(shared *SharedONNXSession) (*onnxModel, error) {
+	inputTensor, err := ort.NewEmptyTensor[float32](shared.inputShape)
 	if err != nil {
 		return nil, fmt.Errorf("创建 ONNX 输入张量失败: %w", err)
 	}
-	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
+	outputTensor, err := ort.NewEmptyTensor[float32](shared.outputShape)
 	if err != nil {
 		_ = inputTensor.Destroy()
 		return nil, fmt.Errorf("创建 ONNX 输出张量失败: %w", err)
 	}
 
-	sessionOptions, err := ort.NewSessionOptions()
+	return &onnxModel{
+		path:         shared.modelPath,
+		inputName:    shared.inputName,
+		outputName:   shared.outputName,
+		shared:       shared,
+		inputTensor:  inputTensor,
+		outputTensor: outputTensor,
+	}, nil
+}
+
+func loadONNXModelFull(modelPath string, profile ONNXModelProfile) (*onnxModel, error) {
+	shared, err := LoadSharedONNXSession(modelPath, profile)
 	if err != nil {
-		_ = outputTensor.Destroy()
-		_ = inputTensor.Destroy()
+		return nil, err
+	}
+	m, err := newONNXModelFromShared(shared)
+	if err != nil {
+		_ = shared.Destroy()
+		return nil, err
+	}
+	return m, nil
+}
+
+func buildSessionOptions() (*ort.SessionOptions, error) {
+	options, err := ort.NewSessionOptions()
+	if err != nil {
 		return nil, fmt.Errorf("创建 ONNX Session 选项失败: %w", err)
 	}
-	defer sessionOptions.Destroy()
 
-	if err := sessionOptions.SetGraphOptimizationLevel(ort.GraphOptimizationLevelEnableAll); err != nil {
-		_ = outputTensor.Destroy()
-		_ = inputTensor.Destroy()
+	if err := options.SetGraphOptimizationLevel(ort.GraphOptimizationLevelEnableAll); err != nil {
+		_ = options.Destroy()
 		return nil, fmt.Errorf("设置 ONNX 图优化级别失败: %w", err)
 	}
-	if err := sessionOptions.SetExecutionMode(ort.ExecutionModeSequential); err != nil {
-		_ = outputTensor.Destroy()
-		_ = inputTensor.Destroy()
+	if err := options.SetExecutionMode(ort.ExecutionModeParallel); err != nil {
+		_ = options.Destroy()
 		return nil, fmt.Errorf("设置 ONNX 执行模式失败: %w", err)
 	}
 
@@ -647,54 +861,27 @@ func loadONNXModel(modelPath string, profile ONNXModelProfile) (*onnxModel, erro
 	if intraThreads > 6 {
 		intraThreads = 6
 	}
-	if err := sessionOptions.SetIntraOpNumThreads(intraThreads); err != nil {
-		_ = outputTensor.Destroy()
-		_ = inputTensor.Destroy()
+	if err := options.SetIntraOpNumThreads(intraThreads); err != nil {
+		_ = options.Destroy()
 		return nil, fmt.Errorf("设置 ONNX IntraOp 线程数失败: %w", err)
 	}
-	if err := sessionOptions.SetInterOpNumThreads(1); err != nil {
-		_ = outputTensor.Destroy()
-		_ = inputTensor.Destroy()
+	if err := options.SetInterOpNumThreads(1); err != nil {
+		_ = options.Destroy()
 		return nil, fmt.Errorf("设置 ONNX InterOp 线程数失败: %w", err)
 	}
-	if err := sessionOptions.AddSessionConfigEntry("session.intra_op.allow_spinning", "0"); err != nil {
-		_ = outputTensor.Destroy()
-		_ = inputTensor.Destroy()
+	if err := options.AddSessionConfigEntry("session.intra_op.allow_spinning", "0"); err != nil {
+		_ = options.Destroy()
 		return nil, fmt.Errorf("设置 ONNX intra-op 自旋失败: %w", err)
 	}
-	if err := sessionOptions.AddSessionConfigEntry("session.inter_op.allow_spinning", "0"); err != nil {
-		_ = outputTensor.Destroy()
-		_ = inputTensor.Destroy()
+	if err := options.AddSessionConfigEntry("session.inter_op.allow_spinning", "0"); err != nil {
+		_ = options.Destroy()
 		return nil, fmt.Errorf("设置 ONNX inter-op 自旋失败: %w", err)
 	}
-	if err := sessionOptions.AddSessionConfigEntry("session.force_spinning_stop", "1"); err != nil {
-		_ = outputTensor.Destroy()
-		_ = inputTensor.Destroy()
+	if err := options.AddSessionConfigEntry("session.force_spinning_stop", "1"); err != nil {
+		_ = options.Destroy()
 		return nil, fmt.Errorf("设置 ONNX 强制停止自旋失败: %w", err)
 	}
-
-	session, err := ort.NewAdvancedSession(
-		modelPath,
-		[]string{inputs[0].Name},
-		[]string{outputs[0].Name},
-		[]ort.Value{inputTensor},
-		[]ort.Value{outputTensor},
-		sessionOptions,
-	)
-	if err != nil {
-		_ = outputTensor.Destroy()
-		_ = inputTensor.Destroy()
-		return nil, fmt.Errorf("创建 ONNX Session 失败: %w", err)
-	}
-
-	return &onnxModel{
-		path:         modelPath,
-		inputName:    inputs[0].Name,
-		outputName:   outputs[0].Name,
-		session:      session,
-		inputTensor:  inputTensor,
-		outputTensor: outputTensor,
-	}, nil
+	return options, nil
 }
 
 func resolveProfileInputShape(shape ort.Shape, profile ONNXModelProfile) (ort.Shape, error) {
@@ -741,11 +928,9 @@ func resolveProfileOutputShape(shape ort.Shape, profile ONNXModelProfile) (ort.S
 			int64(profile.Frames),
 		}
 	}
-
 	if len(shape) != expectedRank {
 		return nil, fmt.Errorf("输出形状必须是 %d 维，当前是 %s", expectedRank, shape.String())
 	}
-
 	resolved := shape.Clone()
 	for i := range resolved {
 		if i == 0 {
@@ -758,7 +943,6 @@ func resolveProfileOutputShape(shape ort.Shape, profile ONNXModelProfile) (ort.S
 			}
 			continue
 		}
-
 		if resolved[i] <= 0 {
 			resolved[i] = expected[i]
 			continue
@@ -767,7 +951,6 @@ func resolveProfileOutputShape(shape ort.Shape, profile ONNXModelProfile) (ort.S
 			return nil, fmt.Errorf("输出第 %d 维与配置不一致：模型=%d 配置=%d", i, resolved[i], expected[i])
 		}
 	}
-
 	if err := resolved.Validate(); err != nil {
 		return nil, err
 	}
@@ -781,7 +964,10 @@ func (m *onnxModel) Run(input []float32) ([]float32, error) {
 	}
 	copy(m.inputTensor.GetData(), input)
 	m.outputTensor.ZeroContents()
-	if err := m.session.Run(); err != nil {
+
+	err := m.shared.session.Run([]ort.Value{m.inputTensor}, []ort.Value{m.outputTensor})
+
+	if err != nil {
 		return nil, err
 	}
 	out := make([]float32, len(m.outputTensor.GetData()))
@@ -791,11 +977,6 @@ func (m *onnxModel) Run(input []float32) ([]float32, error) {
 
 func (m *onnxModel) Destroy() error {
 	var firstErr error
-	if m.session != nil {
-		if err := m.session.Destroy(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
 	if m.outputTensor != nil {
 		if err := m.outputTensor.Destroy(); err != nil && firstErr == nil {
 			firstErr = err
