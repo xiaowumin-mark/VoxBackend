@@ -177,7 +177,6 @@ func (c *conn) handleMessage(raw []byte, waitingForPong *bool) error {
 	if err != nil {
 		return fmt.Errorf("反序列化服务器消息失败: %w", err)
 	}
-
 	switch PayloadType(msgType) {
 	case PayloadPing:
 		// Rust: trace!("收到服务器的 Ping。回复 Pong。")

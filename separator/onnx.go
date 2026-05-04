@@ -376,6 +376,14 @@ func (s *ONNX) compensation() float64 {
 }
 
 func (s *ONNX) Reset() {
+	s.ResetOutput()
+	s.warmupOnce = sync.Once{}
+	s.warmupReady = make(chan struct{})
+	s.fallbackBlendVocals = audio.Sample{}
+	s.fallbackBlendAccomp = audio.Sample{}
+}
+
+func (s *ONNX) ResetOutput() {
 	s.pending = nil
 	s.vocalsQueue = nil
 	s.accompQueue = nil

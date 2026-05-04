@@ -101,6 +101,9 @@ type PlaylistManager struct {
 
 	nextCrossfadeConsumed int64
 
+	seeking  atomic.Bool
+	seekDone atomic.Bool
+
 	sharedVocalSession *separator.SharedONNXSession
 	sharedOtherSession *separator.SharedONNXSession
 
@@ -217,6 +220,10 @@ func (pm *PlaylistManager) createBundle(index int, reason string) (*PipelineBund
 	ring := audio.NewRing(ringCapacity)
 	mixer := audio.NewMixer(pm.cfg.VocalGain, pm.cfg.MasterVolume, int(playbackRate), float64(pm.cfg.VocalGainRamp)/float64(time.Millisecond))
 	pipeline := NewPipeline(streamer, streamer, sep, ring, format.SampleRate, playbackRate)
+	pipeline.SetSeekDoneCallback(func() {
+		pm.seekDone.Store(true)
+		pm.emitEvent(EventSeekFinished, index, track.Path, "seek 完成")
+	})
 
 	var rt beep.Streamer
 	var vocalChain, accompChain *dsp.Chain
@@ -433,6 +440,18 @@ func (pm *PlaylistManager) Stream(dst [][2]float64) (int, bool) {
 	default:
 	}
 
+	if pm.seeking.Load() {
+		if pm.seekDone.Load() {
+			pm.seeking.Store(false)
+			pm.seekDone.Store(false)
+		} else {
+			for i := range dst {
+				dst[i] = [2]float64{}
+			}
+			return len(dst), true
+		}
+	}
+
 	select {
 	case result := <-pm.hardCutReadyCh:
 		pm.consumeHardCutResult(result)
@@ -591,7 +610,6 @@ func (pm *PlaylistManager) processCommandLocked(cmd PlayerCmd) {
 		}
 		if wasEmpty && len(pm.tracks) > 0 {
 			pm.currentIndex = 0
-			pm.needsLoad = pm.current == nil
 		}
 		pm.emitPlaylistChanged()
 	case CmdRemoveTrack:
@@ -832,13 +850,9 @@ func (pm *PlaylistManager) applySeek(sampleOffset int64) {
 		sampleOffset = pm.current.totalSample
 	}
 	pm.currentPos = sampleOffset
+	pm.seeking.Store(true)
+	pm.current.pipeline.SeekSamplesAsync(sampleOffset)
 	pm.current.pipeline.ring.DiscardAndReopen()
-	pm.emitEvent(EventSeekStarted, pm.currentIndex, pm.current.track.Path, "开始 seek")
-	if err := pm.current.pipeline.SeekSamples(sampleOffset); err != nil {
-		pm.emitError(pm.currentIndex, pm.current.track.Path, err)
-	} else {
-		pm.emitEvent(EventSeekFinished, pm.currentIndex, pm.current.track.Path, "seek 完成")
-	}
 	if pm.current.totalSample > 0 &&
 		pm.current.totalSample-sampleOffset <= int64(2*pm.sampleRate) {
 		pm.forceHardCut = true
@@ -849,6 +863,8 @@ func (pm *PlaylistManager) resetStateLocked() {
 	pm.isCrossfading = false
 	pm.forceHardCut = false
 	pm.loadingNext.Store(false)
+	pm.seeking.Store(false)
+	pm.seekDone.Store(false)
 	pm.drainReadyChannelsLocked()
 }
 
@@ -1080,6 +1096,10 @@ func (pm *PlaylistManager) Snapshot(paused bool) State {
 		state.Track = &t
 	}
 	return state
+}
+
+func (pm *PlaylistManager) HasTrack() bool {
+	return pm.current != nil
 }
 
 func (pm *PlaylistManager) applyToBundlesLocked(fn func(*audio.Mixer)) {

@@ -37,9 +37,13 @@ func (s Status) String() string {
 type Config struct {
 	URL            string
 	ConnectTimeout time.Duration
+	// ReconnectInterval 断开/连接失败后重试间隔，0 表示不自动重连（默认行为）
+	ReconnectInterval time.Duration
 
 	OnCommand      func(cmd *Command)
 	OnStatusChange func(st Status)
+	// OnConnected 连接建立后调用（Initialize 已发送，可在回调中推送初始状态）
+	OnConnected func()
 }
 
 func (c Config) withDefaults() Config {
@@ -189,9 +193,10 @@ func (c *Client) connectLoop() {
 		}
 		inner := newConn(c.cfg.URL, dialer, c)
 		if err := inner.dial(c.ctx); err != nil {
-			c.setStatus(StatusError)
-			log.Printf("[WebSocket 客户端] 连接失败: %v", err)
-			return
+			if !c.reconnectAfter(err, "连接失败") {
+				return
+			}
+			continue
 		}
 
 		c.mu.Lock()
@@ -203,6 +208,10 @@ func (c *Client) connectLoop() {
 
 		// Rust: 发送 Initialize → sleep 50ms → push_full_state
 		inner.send(marshalInitialize())
+
+		if c.cfg.OnConnected != nil {
+			c.cfg.OnConnected()
+		}
 
 		runErr := inner.run()
 
@@ -219,13 +228,34 @@ func (c *Client) connectLoop() {
 
 		if runErr != nil {
 			// Rust: 连接流错误 / 服务器关闭
-			log.Printf("[WebSocket 客户端] 连接异常: %v", runErr)
-			c.setStatus(StatusError)
-		} else {
-			c.setStatus(StatusDisconnected)
+			if !c.reconnectAfter(runErr, "连接异常") {
+				return
+			}
+			continue
 		}
+		c.setStatus(StatusDisconnected)
 		return
 	}
+}
+
+func (c *Client) reconnectAfter(err error, label string) bool {
+	interval := c.cfg.ReconnectInterval
+	if interval <= 0 {
+		c.setStatus(StatusError)
+		log.Printf("[WebSocket 客户端] %s: %v", label, err)
+		return false
+	}
+	log.Printf("[WebSocket 客户端] %s: %v，%v 后自动重连", label, err, interval)
+	c.setStatus(StatusError)
+
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-c.ctx.Done():
+		return false
+	}
+	return true
 }
 
 func (c *Client) setStatus(st Status) {

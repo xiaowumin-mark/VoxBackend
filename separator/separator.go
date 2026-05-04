@@ -15,6 +15,7 @@ type Separator interface {
 	WarmupReady() <-chan struct{}
 	Close() error
 	Reset()
+	ResetOutput()
 }
 
 // Drainable 表示分离器可以在输入结束后排出内部延迟样本。

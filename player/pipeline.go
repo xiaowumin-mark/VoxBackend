@@ -28,9 +28,10 @@ type Pipeline struct {
 	outSampleRate beep.SampleRate
 	needResample  bool
 
-	seekCh chan seekRequest
-	done   chan struct{}
-	stop   sync.Once
+	seekCh     chan seekRequest
+	done       chan struct{}
+	stop       sync.Once
+	onSeekDone func()
 }
 
 func NewPipeline(
@@ -77,7 +78,10 @@ func (p *Pipeline) Run() {
 	for {
 		select {
 		case req := <-p.seekCh:
-			req.result <- p.handleSeek(req.sampleOffset, &streamer, input, output, &stems)
+			err := p.handleSeek(req.sampleOffset, &streamer, input, output, &stems)
+			if req.result != nil {
+				req.result <- err
+			}
 			continue
 		default:
 		}
@@ -88,6 +92,15 @@ func (p *Pipeline) Run() {
 			if err := p.sep.Process(&stems, chunk); err != nil {
 				p.ring.CloseWithError(fmt.Errorf("分离器处理失败: %w", err))
 				return
+			}
+			select {
+			case req := <-p.seekCh:
+				err := p.handleSeek(req.sampleOffset, &streamer, input, output, &stems)
+				if req.result != nil {
+					req.result <- err
+				}
+				continue
+			default:
 			}
 			if len(stems.Vocals) < n || len(stems.Accomp) < n {
 				p.ring.CloseWithError(errors.New("分离器返回了长度不足的音频块"))
@@ -106,7 +119,10 @@ func (p *Pipeline) Run() {
 		if !ok {
 			select {
 			case req := <-p.seekCh:
-				req.result <- p.handleSeek(req.sampleOffset, &streamer, input, output, &stems)
+				err := p.handleSeek(req.sampleOffset, &streamer, input, output, &stems)
+				if req.result != nil {
+					req.result <- err
+				}
 				continue
 			default:
 			}
@@ -119,7 +135,10 @@ func (p *Pipeline) Run() {
 				for {
 					select {
 					case req := <-p.seekCh:
-						req.result <- p.handleSeek(req.sampleOffset, &streamer, input, output, &stems)
+						err := p.handleSeek(req.sampleOffset, &streamer, input, output, &stems)
+						if req.result != nil {
+							req.result <- err
+						}
 						goto continueMain
 					default:
 					}
@@ -167,6 +186,31 @@ func (p *Pipeline) handleSeek(
 	p.sep.Reset()
 	p.ring.DiscardAndReopen()
 
+	for {
+		select {
+		case <-p.sep.WarmupReady():
+			goto phase2
+		default:
+		}
+		n, ok := (*streamer).Stream(input)
+		if n > 0 {
+			if err := p.sep.Process(stems, input[:n]); err != nil {
+				return fmt.Errorf("seek 预热失败: %w", err)
+			}
+		}
+		if !ok {
+			break
+		}
+	}
+
+phase2:
+	p.sep.ResetOutput()
+	if err := p.rawSeeker.Seek(int(rawOffset)); err != nil {
+		return fmt.Errorf("seek 源音频(阶段2)失败: %w", err)
+	}
+	*streamer = p.buildStream()
+	p.ring.DiscardAndReopen()
+
 	prefill := PrefillTargetSamples(p.sep)
 	written := 0
 	for written < prefill {
@@ -192,6 +236,9 @@ func (p *Pipeline) handleSeek(
 			break
 		}
 	}
+	if p.onSeekDone != nil {
+		p.onSeekDone()
+	}
 	return nil
 }
 
@@ -209,6 +256,18 @@ func (p *Pipeline) SeekSamples(sampleOffset int64) error {
 	case <-p.done:
 		return ErrPipelineStopped
 	}
+}
+
+func (p *Pipeline) SeekSamplesAsync(sampleOffset int64) {
+	req := seekRequest{sampleOffset: sampleOffset, result: nil}
+	select {
+	case p.seekCh <- req:
+	case <-p.done:
+	}
+}
+
+func (p *Pipeline) SetSeekDoneCallback(fn func()) {
+	p.onSeekDone = fn
 }
 
 func (p *Pipeline) Stop() {

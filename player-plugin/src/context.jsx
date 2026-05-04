@@ -1,6 +1,7 @@
 // 顶部导入（需确保环境中已加载 GSAP 和 figma-squircle）
 import gsap from "gsap";
 import { VoxBackendStates } from "./store";
+import { GetIo } from "./ws";
 const { useEffect, useRef, useState, useCallback, useLayoutEffect } = React;
 const { createPortal } = ReactDOM;
 // Jotai
@@ -47,11 +48,13 @@ function createTopic() {
     div.style.webkitMaskSize = "200% 100%";
     div.style.backgroundClip = "text";
     // 动画：移动 mask-position
-    div.style.animation = "shine-move 2s ease infinite";
+    div.style.animation = "shine-move 2s ease infinite,fadeIn 1s ease-out";
     // 阴影
     div.style.textShadow = "0 0 3px rgba(255,255,255,0.5)";
 
     div.style.mixBlendMode = "plus-lighter";
+    // padding 0
+    div.style.padding = "0";
     return div;
 }
 function MainContext() {
@@ -59,6 +62,7 @@ function MainContext() {
     const hasFoundContainer = useRef(false);
     const [vocalGain, setVocalGain] = useAtom(VoxBackendStates.VocalGain);
     const [isShowEleInPlayer, setIsShowEleInPlayer] = useAtom(VoxBackendStates.ShowEleInPlayer);
+    
     const appleRef = useRef(null);
     const iconRef = useRef(null);
     const ssmaRef = useRef(null);
@@ -77,6 +81,27 @@ function MainContext() {
 
 
 
+    const [masterVolume, setMasterVolume] = useAtom(VoxBackendStates.MasterVolume);
+    useEffect(() => { 
+        GetIo()?.emit("volume",masterVolume)
+    }, [masterVolume]);
+
+    const [vocalGainRamp, setVocalGainRamp] = useAtom(VoxBackendStates.VocalGainRamp);
+    useEffect(() => { 
+        
+        GetIo()?.emit("vocal-gain-ramp",vocalGainRamp)
+    }, [vocalGainRamp]);
+
+    const [crossfade, setCrossfade] = useAtom(VoxBackendStates.Crossfade);
+    useEffect(() => { 
+        GetIo()?.emit("crossfade",crossfade)
+    }, [crossfade]);
+
+    //dsp
+    const [dspMode, setDspMode] = useAtom(VoxBackendStates.DSPMode);
+    useEffect(() => { 
+        GetIo()?.emit("dsp",dspMode)
+    }, [dspMode]);
 
 
 
@@ -232,6 +257,7 @@ function MainContext() {
         // 同时更新 vRef 和外部 atom，确保同步
         vRef.current = actualV;
         setVocalGain(actualV);
+        GetIo()?.emit("vocal-gain", actualV);
 
         // 更新遮罩高度
         ssma.style.height = actualV * 100 + "%";
@@ -270,7 +296,11 @@ function MainContext() {
         } else {
             setOpenState(true);
         }
+
+        
     }, [vocalGain]);
+
+    
 
     // SVG 注入与事件绑定（只执行一次）
     useEffect(() => {

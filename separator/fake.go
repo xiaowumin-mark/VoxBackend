@@ -78,6 +78,10 @@ func (s *Fake) Reset() {
 	s.pending = nil
 }
 
+func (s *Fake) ResetOutput() {
+	s.pending = nil
+}
+
 func (s *Fake) Drain(dst *Chunk, maxSamples int) (int, error) {
 	if maxSamples <= 0 || len(s.pending) == 0 {
 		return 0, nil

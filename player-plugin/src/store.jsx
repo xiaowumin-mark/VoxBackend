@@ -1,4 +1,4 @@
-const { atom } = Jotai;
+const { atom,getDefaultStore } = Jotai;
 
 export const VoxBackendStates = {
     VocalGain: atom(1),

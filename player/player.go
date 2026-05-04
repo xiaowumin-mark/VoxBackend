@@ -405,9 +405,15 @@ func (p *Player) SetPaused(paused bool) {
 		ctrl.Paused = paused
 		speaker.Unlock()
 	}
-	msg := "播放继续"
+	if !paused {
+		manager, _ := p.managerSnapshot()
+		if manager != nil && !manager.HasTrack() {
+			manager.PostCommand(PlayerCmd{Type: CmdPlay})
+		}
+	}
+	msg := "恢复播放"
 	if paused {
-		msg = "播放暂停"
+		msg = "暂停播放"
 	}
 	p.emit(newEvent(EventPausedChanged, msg))
 }

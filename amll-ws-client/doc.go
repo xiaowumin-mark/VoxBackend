@@ -31,6 +31,11 @@
 //	    OnStatusChange: func(st amllwsclient.Status) {
 //	        // 连接状态变更
 //	    },
+//	    OnConnected: func() {
+//	        // 连接建立后推送初始状态
+//	        client.SendMusic(...)
+//	        client.SendProgress(0)
+//	    },
 //	})
 //	client.Connect()           // 异步连接，立即返回
 //	defer client.Close()       // 优雅关闭

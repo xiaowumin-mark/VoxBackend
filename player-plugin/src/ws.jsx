@@ -1,23 +1,29 @@
 
 import { io } from "socket.io-client";
-let io = null
-function ConnectBackend() {
-    if (io != null) return
-    io = io("ws://127.0.0.1:54199", {
+import { GetSongs } from "./db";
+let Io;
+function ConnectBackend(on,dis) {
+    console.log("ws conntecting");
+    
+    Io = io("ws://127.0.0.1:54199", {
         transports: ["websocket"],
+        reconnectionDelay: 500,        // 基础重试间隔 500ms
+        reconnectionDelayMax: 500,     // 最大间隔也是 500ms（固定间隔）
+        randomizationFactor: 0,        // 不加入随机延时
+        reconnectionAttempts: Infinity,
     });
-    io.on("connect", function () {
+    Io.on("connect", function () {
         console.log("Connect Backend");
-        VoxBackendStates.WsIsConect.set(true)
+        on(Io)
     });
-    io.on("disconnect", function () {
+    Io.on("disconnect", function () {
         console.log("Disconnect Backend");
-        VoxBackendStates.WsIsConect.set(false)
+        dis()
     });
 }
 
 function GetIo() {
-    return io
+    return Io
 }
 
 export { ConnectBackend, GetIo }

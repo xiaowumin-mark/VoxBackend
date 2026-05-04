@@ -1,6 +1,7 @@
 const { useAtom } = Jotai
 import { VoxBackendStates } from './store.jsx'
 const { Text, Heading, Card, Flex, Slider, TextField, Switch, Select } = RadixTheme
+const { useEffect } = React
 function Setting() {
     const [vocalGain, setVocalGain] = useAtom(VoxBackendStates.VocalGain)
     const [masterVolume, setMasterVolume] = useAtom(VoxBackendStates.MasterVolume)
@@ -9,6 +10,7 @@ function Setting() {
     const [crossfade, setCrossfade] = useAtom(VoxBackendStates.Crossfade)
     const [dspMode, setDspMode] = useAtom(VoxBackendStates.DSPMode)
     const [crossfadeing, setCrossfadeing] = useAtom(VoxBackendStates.Crossfadeing)
+
     return (
         <>
             <Heading size="7" style={{
@@ -54,9 +56,9 @@ function Setting() {
                     <Select.Root defaultValue={dspMode} onValueChange={setDspMode}>
                         <Select.Trigger />
                         <Select.Content>
-                                <Select.Item value="auto">自动</Select.Item>
-                                <Select.Item value="on">开启</Select.Item>
-                                <Select.Item value="off">关闭</Select.Item>
+                            <Select.Item value="auto">自动</Select.Item>
+                            <Select.Item value="on">开启</Select.Item>
+                            <Select.Item value="off">关闭</Select.Item>
                         </Select.Content>
                     </Select.Root>
 

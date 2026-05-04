@@ -13,12 +13,13 @@ type Ring struct {
 	notEmpty *sync.Cond
 	notFull  *sync.Cond
 
-	buf    []Sample
-	head   int
-	tail   int
-	count  int
-	closed bool
-	err    error
+	buf        []Sample
+	head       int
+	tail       int
+	count      int
+	closed     bool
+	err        error
+	generation int64
 }
 
 func NewRing(capacity int) *Ring {
@@ -35,10 +36,17 @@ func (r *Ring) Write(samples []Sample) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	gen := r.generation
 	written := 0
 	for written < len(samples) {
+		if r.generation != gen {
+			return nil
+		}
 		for r.count == len(r.buf) && !r.closed {
 			r.notFull.Wait()
+			if r.generation != gen {
+				return nil
+			}
 		}
 		if r.closed {
 			if r.err != nil {
@@ -145,6 +153,7 @@ func (r *Ring) DiscardAndReopen() {
 	r.count = 0
 	r.closed = false
 	r.err = nil
+	r.generation++
 	r.notFull.Broadcast()
 	r.notEmpty.Broadcast()
 }
