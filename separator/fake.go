@@ -14,6 +14,7 @@ type Fake struct {
 	latency     int
 	pending     []audio.Sample
 	warmupReady chan struct{}
+	lastRealOutputSamples int
 }
 
 func NewFake(vocalAmount, accompBleed float64, latency int) *Fake {
@@ -40,9 +41,11 @@ func (s *Fake) WarmupReady() <-chan struct{} {
 
 func (s *Fake) Process(dst *Chunk, mix []audio.Sample) error {
 	ensureChunkSize(dst, len(mix))
+	s.lastRealOutputSamples = 0
 
 	if s.latency == 0 {
 		s.split(dst, mix)
+		s.lastRealOutputSamples = len(mix)
 		return nil
 	}
 
@@ -54,6 +57,7 @@ func (s *Fake) Process(dst *Chunk, mix []audio.Sample) error {
 
 	emit := minInt(len(mix), available)
 	if emit > 0 {
+		s.lastRealOutputSamples = emit
 		s.split(dst, s.pending[:emit])
 		copy(s.pending, s.pending[emit:])
 		s.pending = s.pending[:len(s.pending)-emit]
@@ -76,10 +80,16 @@ func (s *Fake) Close() error {
 
 func (s *Fake) Reset() {
 	s.pending = nil
+	s.lastRealOutputSamples = 0
 }
 
 func (s *Fake) ResetOutput() {
 	s.pending = nil
+	s.lastRealOutputSamples = 0
+}
+
+func (s *Fake) LastRealOutputSamples() int {
+	return s.lastRealOutputSamples
 }
 
 func (s *Fake) Drain(dst *Chunk, maxSamples int) (int, error) {

@@ -86,10 +86,6 @@ func main() {
 		})
 		Clientws.SendProgress(uint64(s.Position.Milliseconds()))
 
-		if !s.Paused {
-			log.Println(s.Position.Milliseconds())
-		}
-
 	}
 	Cfg.Callbacks.OnVolumeChanged = func(s player.State) {
 		if Io == nil {

@@ -230,6 +230,7 @@ type ONNX struct {
 	windowSize  int
 	stepSamples int
 	underflows  int
+	lastRealOutputSamples int
 
 	compensationBits atomic.Uint64
 
@@ -391,6 +392,7 @@ func (s *ONNX) ResetOutput() {
 	s.accumAccomp = nil
 	s.accumNorm = nil
 	s.underflows = 0
+	s.lastRealOutputSamples = 0
 	s.pendingFallbackBlend = false
 	s.queueStartSample = 0
 	s.queueEndSample = 0
@@ -400,6 +402,7 @@ func (s *ONNX) ResetOutput() {
 
 func (s *ONNX) Process(dst *Chunk, mix []audio.Sample) error {
 	ensureChunkSize(dst, len(mix))
+	s.lastRealOutputSamples = 0
 	s.pending = append(s.pending, mix...)
 
 	for len(s.pending) >= s.windowSize {
@@ -417,6 +420,7 @@ func (s *ONNX) Process(dst *Chunk, mix []audio.Sample) error {
 
 	emit := minInt(len(mix), len(s.vocalsQueue))
 	if emit > 0 {
+		s.lastRealOutputSamples = emit
 		copy(dst.Vocals[:emit], s.vocalsQueue[:emit])
 		copy(dst.Accomp[:emit], s.accompQueue[:emit])
 		s.vocalsQueue = s.vocalsQueue[emit:]
@@ -459,6 +463,10 @@ func (s *ONNX) Process(dst *Chunk, mix []audio.Sample) error {
 
 	s.outputSamples += int64(len(mix))
 	return nil
+}
+
+func (s *ONNX) LastRealOutputSamples() int {
+	return s.lastRealOutputSamples
 }
 
 func (s *ONNX) isWarmupDone() bool {

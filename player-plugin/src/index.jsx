@@ -35,6 +35,8 @@ extensionContext.addEventListener('extension-load', function () {
         console.log("Connect Backend");
         extensionContext.jotaiStore.set(VoxBackendStates.WsIsConect, true)
 
+        const store = extensionContext.jotaiStore;
+
         if (!handlersRegistered) {
             handlersRegistered = true;
             io.on("PausedChanged", (d) => {
@@ -45,12 +47,17 @@ extensionContext.addEventListener('extension-load', function () {
                 switch (d.type) {
                     case "crossfade_started":
 
-                        extensionContext.jotaiStore.set(VoxBackendStates.Crossfadeing, true)
+                        store.set(VoxBackendStates.Crossfadeing, true)
                         break;
                     case "track_changed":
-                        extensionContext.jotaiStore.set(VoxBackendStates.Crossfadeing, false)
+                        store.set(VoxBackendStates.Crossfadeing, false)
                         break;
                 }
+                const prev = store.get(VoxBackendStates.EventLog);
+                store.set(VoxBackendStates.EventLog, [
+                    { type: d.type, message: d.message, time: Date.now() },
+                    ...prev
+                ].slice(0, 50));
             })
             io.on("OnTrackChanged", (d) => {
                 console.log("OnTrackChanged", d);
@@ -59,11 +66,7 @@ extensionContext.addEventListener('extension-load', function () {
                         console.log(song);
                         if (song.lyricFormat == "ttml") {
                             console.log(extensionContext.lyric.parseTTML(song.lyric));
-                            extensionContext.jotaiStore.set(
-                                extensionContext.amllStates.isLyricPageOpenedAtom,
-                                true
-                            )
-                            extensionContext.jotaiStore.set(
+                            store.set(
                                 extensionContext.amllStates.musicLyricLinesAtom,
                                 extensionContext.lyric.parseTTML(song.lyric).lines
                             )
@@ -72,7 +75,7 @@ extensionContext.addEventListener('extension-load', function () {
                         // 生成链接
                         const cover = URL.createObjectURL(new Blob([song.cover], { type: song.type }));
                         console.log(cover);
-                        extensionContext.jotaiStore.set(
+                        store.set(
                             extensionContext.amllStates.musicCoverAtom,
                             cover
                         )
@@ -89,14 +92,6 @@ extensionContext.addEventListener('extension-load', function () {
                 console.log("OnVocalChanged", d);
                 // id 查找歌曲
             })
-            io.on("cfg", (d) => {
-                console.log("cfg", d);
-                extensionContext.jotaiStore.set(VoxBackendStates.MasterVolume, d.MasterVolume)
-                extensionContext.jotaiStore.set(VoxBackendStates.Crossfade, d.Crossfade)
-                extensionContext.jotaiStore.set(VoxBackendStates.DSPMode, d.DSPMode)
-                extensionContext.jotaiStore.set(VoxBackendStates.VocalGain, d.VocalGain)
-                extensionContext.jotaiStore.set(VoxBackendStates.VocalGainRamp, d.VocalGainRamp)
-            })
         }
 
         GetSongs().then(songs => {
@@ -111,7 +106,6 @@ extensionContext.addEventListener('extension-load', function () {
                     songName: song.songName
                 }
             }))
-            io.emit("need-cfg")
         })
     }, () => {
         extensionContext.jotaiStore.set(VoxBackendStates.WsIsConect, false)

@@ -18,24 +18,6 @@ func StartServer() {
 	Io.OnConnection(func(socket *socketio.Socket) {
 		fmt.Println("OnConnection")
 
-		socket.On("need-cfg", func(event *socketio.EventPayload) {
-			fmt.Println("OnNeedCfg")
-			Io.Emit("cfg", map[string]any{
-				"VocalGain":        Cfg.MasterVolume,
-				"MasterVolume":     Cfg.MasterVolume,
-				"Crossfade":        Cfg.Crossfade.Seconds(),
-				"Prewarm":          Cfg.Prewarm.Seconds(),
-				"VocalGainRamp":    Cfg.VocalGainRamp.Milliseconds(),
-				"SeparatorMode":    Cfg.SeparatorMode,
-				"ONNXModel":        Cfg.ONNX.ModelPath,
-				"ONNXProfile":      Cfg.ONNX.Profile,
-				"ONNXCompensation": Cfg.ONNX.Compensation,
-				"ONNXOtherModel":   Cfg.ONNX.OtherModelPath,
-				"ONNXStepFrames":   Cfg.ONNX.StepFrames,
-				"DSPMode":          Cfg.DSP.Mode,
-			})
-		})
-
 		socket.On("songs", func(event *socketio.EventPayload) {
 			fmt.Println("OnSongs")
 			raw, ok := event.Data[0].([]interface{})

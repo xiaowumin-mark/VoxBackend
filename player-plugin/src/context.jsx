@@ -103,8 +103,6 @@ function MainContext() {
         GetIo()?.emit("dsp",dspMode)
     }, [dspMode]);
 
-
-
     const [crossfadeing, setCrossfadeing] = useAtom(VoxBackendStates.Crossfadeing);
     const [musicQualityAtom, setMusicQualityAtom] = useAtom(extensionContext.amllStates.musicQualityAtom);
     useEffect(() => {

@@ -1,7 +1,7 @@
 const { useAtom } = Jotai
 import { VoxBackendStates } from './store.jsx'
-const { Text, Heading, Card, Flex, Slider, TextField, Switch, Select } = RadixTheme
-const { useEffect } = React
+const { Text, Heading, Card, Flex, Slider, TextField, Switch, Select, Badge } = RadixTheme
+const { useEffect, useRef } = React
 function Setting() {
     const [vocalGain, setVocalGain] = useAtom(VoxBackendStates.VocalGain)
     const [masterVolume, setMasterVolume] = useAtom(VoxBackendStates.MasterVolume)
@@ -10,12 +10,36 @@ function Setting() {
     const [crossfade, setCrossfade] = useAtom(VoxBackendStates.Crossfade)
     const [dspMode, setDspMode] = useAtom(VoxBackendStates.DSPMode)
     const [crossfadeing, setCrossfadeing] = useAtom(VoxBackendStates.Crossfadeing)
+    const [wsIsConect] = useAtom(VoxBackendStates.WsIsConect)
+    const [eventLog] = useAtom(VoxBackendStates.EventLog)
+    const logRef = useRef(null)
+
+    useEffect(() => {
+        logRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    }, [eventLog]);
 
     return (
         <>
             <Heading size="7" style={{
                 lineHeight: 1.5
             }}>VoxBackend</Heading>
+            <Card mt="2">
+                <Flex align="center" gap="2">
+                    <div style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: '50%',
+                        backgroundColor: wsIsConect ? '#22c55e' : '#ef4444',
+                        boxShadow: wsIsConect ? '0 0 6px #22c55e' : '0 0 6px #ef4444',
+                    }} />
+                    <Text size="2" color="gray">
+                        {wsIsConect ? '已连接' : '未连接'}
+                    </Text>
+                    <Badge color={wsIsConect ? 'green' : 'red'}>
+                        {wsIsConect ? 'Socket.IO :54199' : '等待连接...'}
+                    </Badge>
+                </Flex>
+            </Card>
 
             <Flex direction="column" gap="0.5">
                 <SettingEntry label="显示人声调节控件" description="在歌词界面中显示人声调节控件">
@@ -63,11 +87,31 @@ function Setting() {
                     </Select.Root>
 
                 </SettingEntry>
-                <SettingEntry label="淡入淡出" description="是否启用淡入淡出">
-                    <Switch checked={crossfadeing} onCheckedChange={setCrossfadeing} />
-                </SettingEntry>
 
             </Flex>
+            <Card mt="3">
+                <Heading size="3" mb="2">事件日志</Heading>
+                <div ref={logRef} style={{ height: 200, overflowY: 'auto' }}>
+                    {eventLog.length === 0 ? (
+                        <Text size="2" color="gray">暂无事件</Text>
+                    ) : (
+                        <Flex direction="column" gap="1">
+                            {eventLog.map((entry, i) => {
+                                const t = new Date(entry.time);
+                                const ts = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`;
+                                const isError = entry.type === 'error';
+                                return (
+                                    <Flex key={i} gap="2" align="center">
+                                        <Text size="1" color="gray" style={{ fontFamily: 'monospace', width: 56, flexShrink: 0 }}>{ts}</Text>
+                                        <Badge color={isError ? 'red' : 'gray'} size="1">{entry.type}</Badge>
+                                        <Text size="1" style={{ wordBreak: 'break-all' }}>{entry.message}</Text>
+                                    </Flex>
+                                );
+                            })}
+                        </Flex>
+                    )}
+                </div>
+            </Card>
         </>
     )
 }

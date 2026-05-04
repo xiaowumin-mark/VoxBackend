@@ -213,6 +213,7 @@ phase2:
 
 	prefill := PrefillTargetSamples(p.sep)
 	written := 0
+	waitingForRealOutput := true
 	for written < prefill {
 		n, ok := (*streamer).Stream(input)
 		if n > 0 {
@@ -222,6 +223,15 @@ phase2:
 			}
 			if len(stems.Vocals) < n || len(stems.Accomp) < n {
 				return errors.New("seek 预填充：分离器返回长度不足")
+			}
+			if waitingForRealOutput {
+				if reporter, hasReporter := p.sep.(interface{ LastRealOutputSamples() int }); hasReporter {
+					if reporter.LastRealOutputSamples() == 0 {
+						continue
+					}
+				}
+				waitingForRealOutput = false
+				p.ring.DiscardAndReopen()
 			}
 			for i := 0; i < n; i++ {
 				output[2*i] = stems.Vocals[i]
