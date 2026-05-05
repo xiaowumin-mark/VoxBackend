@@ -14,19 +14,25 @@ function atomWithLocalStorage(key, defaultValue) {
         (get) => get(base),
         (_get, set, value) => {
             set(base, value);
-            try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+            try { localStorage.setItem(key, JSON.stringify(value)); } catch { }
         }
     );
 }
 
 export const VoxBackendStates = {
-    VocalGain:       atomWithLocalStorage('vox_vocal_gain', 1),
-    MasterVolume:    atomWithLocalStorage('vox_master_volume', 1),
+    VocalGain: atomWithLocalStorage('vox_vocal_gain', 1),
+    MasterVolume: atomWithLocalStorage('vox_master_volume', 1),
     ShowEleInPlayer: atomWithLocalStorage('vox_show_ele', true),
-    VocalGainRamp:   atomWithLocalStorage('vox_gain_ramp', 1000),
-    Crossfade:       atomWithLocalStorage('vox_crossfade', 12),
-    DSPMode:         atomWithLocalStorage('vox_dsp_mode', 'auto'),
-    Crossfadeing:    atom(false),
-    WsIsConect:      atom(false),
-    EventLog:        atom([]),
+    VocalGainRamp: atomWithLocalStorage('vox_gain_ramp', 1000),
+    Crossfade: atomWithLocalStorage('vox_crossfade', 12),
+    DSPMode: atomWithLocalStorage('vox_dsp_mode', 'auto'),
+    IsCrossfade:      atomWithLocalStorage('vox_is_crossfade', true),
+    NeedShufflePlay:  atom(false),
+    NowPlayListName:  atomWithLocalStorage('vox_playlist_name', ''),
+    NowPlayList:      atom([]),
+    Crossfadeing: atom(false),
+    WsIsConect: atom(false),
+    EventLog: atom([]),
+    IsShowPlaylist:   atom(false),
+    CurrentTrackId:   atom(''),
 }

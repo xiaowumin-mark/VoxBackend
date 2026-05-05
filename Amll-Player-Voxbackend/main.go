@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"time"
 
 	amllwsclient "github.com/xiaowumin-mark/VoxBackend/amll-ws-client"
+	"github.com/xiaowumin-mark/VoxBackend/console"
 	"github.com/xiaowumin-mark/VoxBackend/player"
 	"github.com/xiaowumin-mark/VoxBackend/separator"
 )
@@ -13,15 +14,24 @@ import (
 var Cfg = player.DefaultConfig()
 var Player *player.Player
 var Clientws *amllwsclient.Client
+var Con *console.Console
 
 func main() {
+	Con = console.New()
+	defer Con.Close()
 
 	Cfg.SeparatorMode = player.SeparatorONNX
 	Cfg.ONNX.ModelPath = "./onnx/umxl_vocals.onnx"
 	Cfg.ONNX.RuntimeLibraryPath = "./onnxruntime/lib/onnxruntime.dll"
+
+	Con.Log("🔧 分离器: ONNX (umxl_vocals)")
+	Con.Log("🔊 缓冲: %d", Cfg.SpeakerBufferSize)
+	Con.Log("🎚️ DSP: %s | Crossfade %.0fs | Prewarm %.0fs", Cfg.DSP.Mode, Cfg.Crossfade.Seconds(), Cfg.Prewarm.Seconds())
+
 	if err := separator.InitONNXRuntime(Cfg.ONNX.RuntimeLibraryPath); err != nil {
 		panic(err)
 	}
+
 	Cfg.Callbacks.OnEvent = func(ev player.Event) {
 		if Io != nil {
 			Io.Emit("Event", map[string]any{
@@ -29,16 +39,15 @@ func main() {
 				"message": ev.Message,
 			})
 		}
-		log.Printf("[%s] %s", ev.Type, ev.Message)
 		if ev.Type == player.EventError {
-			log.Printf("[%s] %s: %v", ev.Type, ev.Message, ev.Err)
+			Con.Log("❌ [%s] %s: %v", ev.Type, ev.Message, ev.Err)
 			return
 		}
-		if ev.TrackPath != "" {
-			log.Printf("[%s] #%d %s - %s", ev.Type, ev.TrackIndex, ev.TrackPath, ev.Message)
-			return
+		if ev.Type == player.EventTrackChanged {
+			if ev.Track != nil {
+				Con.Log("🎵 正在播放: %s — %s", ev.Track.Title, ev.Track.Artist)
+			}
 		}
-
 	}
 	Cfg.Callbacks.OnPausedChanged = func(s player.State) {
 		if Io == nil {
@@ -48,7 +57,6 @@ func main() {
 			"paused":   s.Paused,
 			"position": s.Position.Milliseconds(),
 			"duration": s.Duration.Milliseconds(),
-			//"id":       s.Track.Meta["id"],
 		})
 		if s.Paused {
 			Clientws.SendPaused()
@@ -82,10 +90,29 @@ func main() {
 			"paused":   s.Paused,
 			"position": s.Position.Milliseconds(),
 			"duration": s.Duration.Milliseconds(),
-			//"id":       s.Track.Meta["id"].(string),
 		})
 		Clientws.SendProgress(uint64(s.Position.Milliseconds()))
 
+		if s.Track != nil {
+			status := fmt.Sprintf("🎵 %s — %s  %s / %s   🔊 %.0f%% 🎤 %.0f%%",
+				truncateStr(s.Track.Title, 30),
+				truncateStr(s.Track.Artist, 20),
+				formatDuration(s.Position),
+				formatDuration(s.Duration),
+				s.Volume*100,
+				s.VocalGain*100,
+			)
+			if Io != nil {
+				status += "  🔗 ●"
+			}
+			if Clientws != nil {
+				status += "  🌐 ●"
+			}
+			if s.Paused {
+				status += "  ⏸"
+			}
+			Con.SetStatus(status)
+		}
 	}
 	Cfg.Callbacks.OnVolumeChanged = func(s player.State) {
 		if Io == nil {
@@ -103,6 +130,24 @@ func main() {
 			"vocalGain": s.VocalGain,
 		})
 	}
+	Cfg.Callbacks.OnPlaylistChanged = func(s player.State) {
+		if Io == nil {
+			return
+		}
+		tracks := Player.Playlist()
+		list := make([]map[string]any, 0, len(tracks))
+		for _, t := range tracks {
+			list = append(list, map[string]any{
+				"id":          t.Meta["id"],
+				"duration":    t.Meta["duration"],
+				"filePath":    t.Path,
+				"songAlbum":   t.Album,
+				"songArtists": t.Artist,
+				"songName":    t.Title,
+			})
+		}
+		Io.Emit("playlist", list)
+	}
 	Player = player.New(Cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -113,10 +158,15 @@ func main() {
 	}
 	go StartServer()
 
+	Con.Log("🌐 AMLL WS: localhost:11444")
+	Con.Log("🔌 插件端口: :54199")
+
 	Clientws = amllwsclient.New(amllwsclient.Config{
 		URL:               "ws://localhost:11444",
 		ReconnectInterval: 1 * time.Second,
 		OnConnected: func() {
+			Con.Log("🌐 AMLL Player 已连接")
+			Clientws.SendVolume(Cfg.MasterVolume)
 			s := Player.Snapshot()
 			if s.Track != nil {
 				var musicID string
@@ -137,7 +187,6 @@ func main() {
 					Clientws.SendResumed()
 				}
 			}
-			Clientws.SendVolume(Cfg.MasterVolume)
 		},
 		OnCommand: func(cmd *amllwsclient.Command) {
 			switch cmd.Type {
@@ -147,41 +196,48 @@ func main() {
 				Player.SetPaused(false)
 			case amllwsclient.CmdForwardSong:
 				Player.Next()
-				// 下一首
 			case amllwsclient.CmdBackwardSong:
 				Player.Previous()
-				// 上一首
 			case amllwsclient.CmdSetVolume:
 				Player.SetMasterVolume(cmd.Volume)
-				log.Printf("设置音量: %.2f", cmd.Volume)
-				// cmd.Volume 新音量 (0.0-1.0)
+				Con.Log("🔊 音量: %.0f%%", cmd.Volume*100)
 			case amllwsclient.CmdSeekPlayProgress:
 				Player.SeekTo((time.Duration(cmd.Progress) / 1000) * time.Second)
-				// cmd.Progress 跳转位置 (ms)
-			case amllwsclient.CmdSetRepeatMode:
-				// cmd.Mode 重复模式 ("off"/"all"/"one")
-			case amllwsclient.CmdSetShuffleMode:
-				// cmd.Enabled 随机播放开关
 			}
 		},
 		OnStatusChange: func(st amllwsclient.Status) {
-			// 连接状态变更
 			switch st {
 			case amllwsclient.StatusConnecting:
-				log.Printf("正在连接")
+				Con.Log("🌐 正在连接 AMLL Player...")
 			case amllwsclient.StatusConnected:
-				log.Printf("已连接")
-
+				Con.Log("🌐 AMLL Player 已连接")
 			case amllwsclient.StatusDisconnected:
-				log.Printf("已断开")
+				Con.Log("🌐 AMLL Player 已断开")
 			}
 		},
 	})
-	Clientws.Connect()     // 异步连接，立即返回
-	defer Clientws.Close() // 优雅关闭
+	Clientws.Connect()
+	defer Clientws.Close()
+
+	Con.Log("")
+	Con.Log("────────────────────────────────")
 
 	if err := Player.Wait(); err != nil {
 		panic(err)
 	}
 	StopServer()
+}
+
+func formatDuration(d time.Duration) string {
+	m := int(d.Minutes())
+	s := int(d.Seconds()) % 60
+	return fmt.Sprintf("%02d:%02d", m, s)
+}
+
+func truncateStr(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) > n {
+		return string(runes[:n-1]) + "…"
+	}
+	return s
 }

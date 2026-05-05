@@ -16,7 +16,7 @@ import pkg from './package.json'
 export default defineConfig({
   plugins: [react({ jsxRuntime: 'classic' })],
   esbuild: {
-    drop: ['debugger'],
+    drop: ['debugger','console'],
     banner: amllMeta, // 确保这里有明确定义
   },
   build: {

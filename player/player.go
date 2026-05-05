@@ -236,6 +236,13 @@ func (p *Player) ClearPlaylist() {
 	}
 }
 
+func (p *Player) ShuffleUpcoming() {
+	manager, _ := p.managerSnapshot()
+	if manager != nil {
+		manager.ShuffleUpcoming()
+	}
+}
+
 func (p *Player) SetTrack(index int, track Track) {
 	p.updateConfig(func(cfg *Config) {
 		if index < 0 || index >= len(cfg.Tracks) {
@@ -266,6 +273,10 @@ func (p *Player) SetTrackMeta(index int, key string, val any) {
 }
 
 func (p *Player) Playlist() []Track {
+	manager, _ := p.managerSnapshot()
+	if manager != nil {
+		return manager.TrackList()
+	}
 	cfg := p.config()
 	return cloneTracks(cfg.Tracks)
 }

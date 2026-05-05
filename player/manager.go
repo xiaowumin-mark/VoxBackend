@@ -3,6 +3,7 @@ package player
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ const (
 	CmdClearPlaylist
 	CmdSetTrack
 	CmdSetTrackMeta
+	CmdShuffleUpcoming
 )
 
 type PlayerCmd struct {
@@ -412,6 +414,13 @@ func (pm *PlaylistManager) ClearPlaylist() {
 	}
 }
 
+func (pm *PlaylistManager) ShuffleUpcoming() {
+	select {
+	case pm.cmdCh <- PlayerCmd{Type: CmdShuffleUpcoming}:
+	default:
+	}
+}
+
 func (pm *PlaylistManager) SetTrack(index int, track Track) {
 	select {
 	case pm.cmdCh <- PlayerCmd{Type: CmdSetTrack, Index: index, Track: track}:
@@ -618,6 +627,16 @@ func (pm *PlaylistManager) processCommandLocked(cmd PlayerCmd) {
 		pm.handleMoveTrackLocked(cmd.Index, cmd.Target)
 	case CmdClearPlaylist:
 		pm.handleClearPlaylistLocked()
+	case CmdShuffleUpcoming:
+		n := len(pm.tracks) - pm.currentIndex - 1
+		if n >= 2 {
+			upcoming := pm.tracks[pm.currentIndex+1:]
+			for i := n - 1; i > 0; i-- {
+				j := rand.Intn(i + 1)
+				upcoming[i], upcoming[j] = upcoming[j], upcoming[i]
+			}
+			pm.emitPlaylistChanged()
+		}
 	case CmdSetTrack:
 		if cmd.Index >= 0 && cmd.Index < len(pm.tracks) {
 			pm.tracks[cmd.Index] = cmd.Track
@@ -1100,6 +1119,10 @@ func (pm *PlaylistManager) Snapshot(paused bool) State {
 
 func (pm *PlaylistManager) HasTrack() bool {
 	return pm.current != nil
+}
+
+func (pm *PlaylistManager) TrackList() []Track {
+	return cloneTracks(pm.tracks)
 }
 
 func (pm *PlaylistManager) applyToBundlesLocked(fn func(*audio.Mixer)) {

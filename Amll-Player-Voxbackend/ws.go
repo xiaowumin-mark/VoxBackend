@@ -16,10 +16,9 @@ func StartServer() {
 	Io = socketio.New()
 
 	Io.OnConnection(func(socket *socketio.Socket) {
-		fmt.Println("OnConnection")
+		Con.Log("🔗 插件已连接")
 
 		socket.On("songs", func(event *socketio.EventPayload) {
-			fmt.Println("OnSongs")
 			raw, ok := event.Data[0].([]interface{})
 			if !ok {
 				fmt.Println("invalid payload type:", event.Data)
@@ -40,86 +39,87 @@ func StartServer() {
 					Meta:   song,
 				})
 			}
+			Con.Log("📋 已加载 %d 首歌曲", len(tracks))
 			Player.AddTracks(tracks...)
 		})
 
 		socket.On("play", func(event *socketio.EventPayload) {
-			fmt.Println("OnPlay")
 			Player.SetPaused(false)
 		})
 		socket.On("pause", func(event *socketio.EventPayload) {
-			fmt.Println("OnPause")
 			Player.SetPaused(true)
 		})
 
 		socket.On("seek", func(event *socketio.EventPayload) {
-			//fmt.Println("OnSeek")
 			p, ok := event.Data[0].(float64)
 			if !ok {
 				return
 			}
 			Player.SeekTo(time.Duration(p * float64(time.Second)))
-			fmt.Println("OnSeek", p)
-
 		})
 		socket.On("volume", func(event *socketio.EventPayload) {
-			//fmt.Println("OnVolume")
 			p, ok := event.Data[0].(float64)
 			if !ok {
 				return
 			}
 			Player.SetMasterVolume(p)
 			Clientws.SendVolume(p)
-			fmt.Println("OnVolume", p)
-
 		})
 		socket.On("vocal-gain", func(event *socketio.EventPayload) {
-			//fmt.Println("OnVocalGain")
 			p, ok := event.Data[0].(float64)
 			if !ok {
 				return
 			}
 			Player.SetVocalGain(p)
-			fmt.Println("OnVocalGain", p)
 		})
 		socket.On("crossfade", func(event *socketio.EventPayload) {
-			//fmt.Println("OnCrossfade")
 			p, ok := event.Data[0].(float64)
 			if !ok {
 				return
 			}
 			Player.SetCrossfade(time.Duration(p * float64(time.Second)))
-			fmt.Println("OnCrossfade", p)
 		})
 
 		socket.On("dsp", func(event *socketio.EventPayload) {
-			//fmt.Println("dsp")
 			p, ok := event.Data[0].(string)
 			if !ok {
 				return
 			}
 			Player.SetDSPMode(player.DSPMode(p))
-			fmt.Println("dsp", p)
 		})
 
-		//vocalGainRamp
 		socket.On("vocal-gain-ramp", func(event *socketio.EventPayload) {
-			//fmt.Println("OnVocalGainRamp")
 			p, ok := event.Data[0].(float64)
 			if !ok {
 				return
 			}
 			Player.SetVocalRamp(time.Duration(p * float64(time.Millisecond)))
-			fmt.Println("OnVocalGainRamp", p)
 		})
 
 		socket.On("rm-all-songs", func(event *socketio.EventPayload) {
-			fmt.Println("OnRmAllSongs")
 			Player.ClearPlaylist()
 		})
 
+		socket.On("rm", func(event *socketio.EventPayload) {
+			idx, ok := event.Data[0].(float64)
+			if !ok {
+				return
+			}
+			Player.RemoveTrack(int(idx))
+		})
+
+		socket.On("mv", func(event *socketio.EventPayload) {
+			from, _ := event.Data[0].(float64)
+			to, _ := event.Data[1].(float64)
+			Player.MoveTrack(int(from), int(to))
+		})
+
+		socket.On("shuffle-upcoming", func(event *socketio.EventPayload) {
+			Player.ShuffleUpcoming()
+		})
+
 		socket.On("disconnect", func(event *socketio.EventPayload) {
-			fmt.Println("OnDisconnect")
+			Con.Log("💔 插件已断开")
 		})
 	})
 
