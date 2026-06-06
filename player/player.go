@@ -14,6 +14,13 @@ import (
 	"github.com/xiaowumin-mark/VoxBackend/separator"
 )
 
+var speakerState struct {
+	mu          sync.Mutex
+	initialized bool
+	sampleRate  beep.SampleRate
+	bufferSize  int
+}
+
 type Player struct {
 	cfgMu sync.RWMutex
 	cfg   Config
@@ -102,11 +109,11 @@ func (p *Player) run(ctx context.Context) {
 	playbackRate := resolvePlaybackRate(cfg)
 	p.sampleRate.Store(int64(playbackRate))
 
-	if err := speaker.Init(playbackRate, cfg.SpeakerBufferSize); err != nil {
+	if err := ensureSpeaker(playbackRate, cfg.SpeakerBufferSize); err != nil {
 		p.finishWithError(fmt.Errorf("初始化音频输出失败: %w", err))
 		return
 	}
-	defer speaker.Close()
+	defer speaker.Clear()
 
 	manager := NewPlaylistManager(ctx, cfg, cloneTracks(cfg.Tracks), int(playbackRate), p.emit)
 	if err := manager.Start(); err != nil {
@@ -137,6 +144,24 @@ func (p *Player) run(ctx context.Context) {
 
 	speaker.PlayAndWait(ctrl)
 	p.emit(newEvent(EventStopped, "播放器已停止"))
+}
+
+func ensureSpeaker(sampleRate beep.SampleRate, bufferSize int) error {
+	speakerState.mu.Lock()
+	defer speakerState.mu.Unlock()
+	if speakerState.initialized {
+		if speakerState.sampleRate != sampleRate {
+			return fmt.Errorf("音频输出已使用 %dHz 初始化，无法切换到 %dHz", speakerState.sampleRate, sampleRate)
+		}
+		return nil
+	}
+	if err := speaker.Init(sampleRate, bufferSize); err != nil {
+		return err
+	}
+	speakerState.initialized = true
+	speakerState.sampleRate = sampleRate
+	speakerState.bufferSize = bufferSize
+	return nil
 }
 
 func resolvePlaybackRate(cfg Config) beep.SampleRate {

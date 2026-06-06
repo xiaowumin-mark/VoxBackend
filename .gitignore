@@ -15,3 +15,4 @@ AGENTS.md
 /.vscode-test
 /player-plugin/node_modules
 /ref
+/.gocache
