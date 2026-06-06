@@ -83,38 +83,50 @@ func DefaultConfig() Config {
 
 func normalizeConfig(cfg Config) Config {
 	def := DefaultConfig()
+	if isZeroConfig(cfg) {
+		return def
+	}
+	if onlyTracksOrCallbacks(cfg) {
+		def.Tracks = cloneTracks(cfg.Tracks)
+		def.Callbacks = cfg.Callbacks
+		return def
+	}
+
+	preserveZeroValues := resemblesDefaultConfig(cfg, def)
 	if cfg.SeparatorMode == "" {
 		cfg.SeparatorMode = def.SeparatorMode
 	}
-	if cfg.VocalGain == 0 {
-		cfg.VocalGain = def.VocalGain
-	}
-	if cfg.MasterVolume == 0 {
-		cfg.MasterVolume = def.MasterVolume
-	}
-	if cfg.VocalGainRamp == 0 {
-		cfg.VocalGainRamp = def.VocalGainRamp
-	}
-	if cfg.FakeVocalAmount == 0 {
-		cfg.FakeVocalAmount = def.FakeVocalAmount
-	}
-	if cfg.FakeAccompBleed == 0 {
-		cfg.FakeAccompBleed = def.FakeAccompBleed
-	}
-	if cfg.AILatency == 0 {
-		cfg.AILatency = def.AILatency
+	if !preserveZeroValues {
+		if cfg.VocalGain == 0 {
+			cfg.VocalGain = def.VocalGain
+		}
+		if cfg.MasterVolume == 0 {
+			cfg.MasterVolume = def.MasterVolume
+		}
+		if cfg.VocalGainRamp == 0 {
+			cfg.VocalGainRamp = def.VocalGainRamp
+		}
+		if cfg.FakeVocalAmount == 0 {
+			cfg.FakeVocalAmount = def.FakeVocalAmount
+		}
+		if cfg.FakeAccompBleed == 0 {
+			cfg.FakeAccompBleed = def.FakeAccompBleed
+		}
+		if cfg.AILatency == 0 {
+			cfg.AILatency = def.AILatency
+		}
+		if cfg.Crossfade == 0 {
+			cfg.Crossfade = def.Crossfade
+		}
+		if cfg.Prewarm == 0 {
+			cfg.Prewarm = def.Prewarm
+		}
 	}
 	if cfg.ONNX.Profile == "" {
 		cfg.ONNX.Profile = def.ONNX.Profile
 	}
 	if cfg.ONNX.ModelPath == "" {
 		cfg.ONNX.ModelPath = def.ONNX.ModelPath
-	}
-	if cfg.Crossfade == 0 {
-		cfg.Crossfade = def.Crossfade
-	}
-	if cfg.Prewarm == 0 {
-		cfg.Prewarm = def.Prewarm
 	}
 	if cfg.SpeakerBufferSize <= 0 {
 		cfg.SpeakerBufferSize = def.SpeakerBufferSize
@@ -124,6 +136,101 @@ func normalizeConfig(cfg Config) Config {
 	}
 	if cfg.DSP.Mode == "" {
 		cfg.DSP.Mode = def.DSP.Mode
+	} else if !isValidDSPMode(cfg.DSP.Mode) {
+		cfg.DSP.Mode = def.DSP.Mode
 	}
+	cfg.Tracks = cloneTracks(cfg.Tracks)
 	return cfg
+}
+
+func isValidDSPMode(mode DSPMode) bool {
+	return mode == DSPModeOff || mode == DSPModeOn || mode == DSPModeAuto
+}
+
+func onlyTracksOrCallbacks(cfg Config) bool {
+	return cfg.SeparatorMode == "" &&
+		cfg.VocalGain == 0 &&
+		cfg.VocalGainRamp == 0 &&
+		cfg.MasterVolume == 0 &&
+		cfg.FakeVocalAmount == 0 &&
+		cfg.FakeAccompBleed == 0 &&
+		cfg.AILatency == 0 &&
+		cfg.ONNX == (separator.ONNXConfig{}) &&
+		cfg.Crossfade == 0 &&
+		cfg.Prewarm == 0 &&
+		cfg.DSP == (DSPConfig{}) &&
+		cfg.SpeakerBufferSize == 0 &&
+		cfg.StateFrameRate == 0
+}
+
+func resemblesDefaultConfig(cfg, def Config) bool {
+	score := 0
+	if cfg.SeparatorMode == def.SeparatorMode {
+		score++
+	}
+	if cfg.VocalGain == def.VocalGain {
+		score++
+	}
+	if cfg.VocalGainRamp == def.VocalGainRamp {
+		score++
+	}
+	if cfg.MasterVolume == def.MasterVolume {
+		score++
+	}
+	if cfg.FakeVocalAmount == def.FakeVocalAmount {
+		score++
+	}
+	if cfg.FakeAccompBleed == def.FakeAccompBleed {
+		score++
+	}
+	if cfg.AILatency == def.AILatency {
+		score++
+	}
+	if cfg.ONNX == def.ONNX {
+		score++
+	}
+	if cfg.Crossfade == def.Crossfade {
+		score++
+	}
+	if cfg.Prewarm == def.Prewarm {
+		score++
+	}
+	if cfg.DSP == def.DSP {
+		score++
+	}
+	if cfg.SpeakerBufferSize == def.SpeakerBufferSize {
+		score++
+	}
+	if cfg.StateFrameRate == def.StateFrameRate {
+		score++
+	}
+	return score >= 4
+}
+
+func isZeroConfig(cfg Config) bool {
+	return cfg.SeparatorMode == "" &&
+		len(cfg.Tracks) == 0 &&
+		cfg.VocalGain == 0 &&
+		cfg.VocalGainRamp == 0 &&
+		cfg.MasterVolume == 0 &&
+		cfg.FakeVocalAmount == 0 &&
+		cfg.FakeAccompBleed == 0 &&
+		cfg.AILatency == 0 &&
+		cfg.ONNX == (separator.ONNXConfig{}) &&
+		cfg.Crossfade == 0 &&
+		cfg.Prewarm == 0 &&
+		cfg.DSP == (DSPConfig{}) &&
+		cfg.SpeakerBufferSize == 0 &&
+		cfg.StateFrameRate == 0 &&
+		isZeroCallbacks(cfg.Callbacks)
+}
+
+func isZeroCallbacks(cb Callbacks) bool {
+	return cb.OnEvent == nil &&
+		cb.OnState == nil &&
+		cb.OnPausedChanged == nil &&
+		cb.OnVolumeChanged == nil &&
+		cb.OnTrackChanged == nil &&
+		cb.OnVocalChanged == nil &&
+		cb.OnPlaylistChanged == nil
 }

@@ -31,7 +31,7 @@ type Pipeline struct {
 	seekCh     chan seekRequest
 	done       chan struct{}
 	stop       sync.Once
-	onSeekDone func()
+	onSeekDone func(error)
 }
 
 func NewPipeline(
@@ -78,10 +78,7 @@ func (p *Pipeline) Run() {
 	for {
 		select {
 		case req := <-p.seekCh:
-			err := p.handleSeek(req.sampleOffset, &streamer, input, output, &stems)
-			if req.result != nil {
-				req.result <- err
-			}
+			p.handleSeekRequest(req, &streamer, input, output, &stems)
 			continue
 		default:
 		}
@@ -95,10 +92,7 @@ func (p *Pipeline) Run() {
 			}
 			select {
 			case req := <-p.seekCh:
-				err := p.handleSeek(req.sampleOffset, &streamer, input, output, &stems)
-				if req.result != nil {
-					req.result <- err
-				}
+				p.handleSeekRequest(req, &streamer, input, output, &stems)
 				continue
 			default:
 			}
@@ -119,10 +113,7 @@ func (p *Pipeline) Run() {
 		if !ok {
 			select {
 			case req := <-p.seekCh:
-				err := p.handleSeek(req.sampleOffset, &streamer, input, output, &stems)
-				if req.result != nil {
-					req.result <- err
-				}
+				p.handleSeekRequest(req, &streamer, input, output, &stems)
 				continue
 			default:
 			}
@@ -135,10 +126,7 @@ func (p *Pipeline) Run() {
 				for {
 					select {
 					case req := <-p.seekCh:
-						err := p.handleSeek(req.sampleOffset, &streamer, input, output, &stems)
-						if req.result != nil {
-							req.result <- err
-						}
+						p.handleSeekRequest(req, &streamer, input, output, &stems)
 						goto continueMain
 					default:
 					}
@@ -164,6 +152,22 @@ func (p *Pipeline) Run() {
 			return
 		}
 	continueMain:
+	}
+}
+
+func (p *Pipeline) handleSeekRequest(
+	req seekRequest,
+	streamer *beep.Streamer,
+	input []audio.Sample,
+	output []audio.Sample,
+	stems *separator.Chunk,
+) {
+	err := p.handleSeek(req.sampleOffset, streamer, input, output, stems)
+	if p.onSeekDone != nil {
+		p.onSeekDone(err)
+	}
+	if req.result != nil {
+		req.result <- err
 	}
 }
 
@@ -246,9 +250,6 @@ phase2:
 			break
 		}
 	}
-	if p.onSeekDone != nil {
-		p.onSeekDone()
-	}
 	return nil
 }
 
@@ -268,15 +269,32 @@ func (p *Pipeline) SeekSamples(sampleOffset int64) error {
 	}
 }
 
-func (p *Pipeline) SeekSamplesAsync(sampleOffset int64) {
+func (p *Pipeline) SeekSamplesAsync(sampleOffset int64) bool {
 	req := seekRequest{sampleOffset: sampleOffset, result: nil}
 	select {
 	case p.seekCh <- req:
+		return true
 	case <-p.done:
+		return false
+	default:
+	}
+
+	select {
+	case <-p.seekCh:
+	default:
+	}
+
+	select {
+	case p.seekCh <- req:
+		return true
+	case <-p.done:
+		return false
+	default:
+		return false
 	}
 }
 
-func (p *Pipeline) SetSeekDoneCallback(fn func()) {
+func (p *Pipeline) SetSeekDoneCallback(fn func(error)) {
 	p.onSeekDone = fn
 }
 

@@ -126,7 +126,7 @@ function MainContext() {
 
     useEffect(() => {
         if (!container) return;
-        const controls = findElementsByClassContains(document.getElementById('root'), 'bottomControls');
+        const controls = findElementsByClassContains(document.getElementById('amll-lyric-player'), 'bottomControls');
         if (controls.length === 0) return;
         const btn = controls[0].querySelector('button');
         if (!btn) return;
@@ -168,7 +168,8 @@ function MainContext() {
 
     useEffect(() => {
         if (!container) return;
-        const lyric = findElementsByClassContains(document.getElementById('root'), '_lyric_')[0];
+        const lyric = findElementsByClassContains(document.getElementById('amll-lyric-player'), 'lyric')[0];
+        console.log(lyric);
         if (!lyric) return;
         lyric.style.position = 'relative';
         if (!lyricContainer) {

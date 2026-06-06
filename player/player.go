@@ -180,6 +180,7 @@ func (p *Player) PlayIndex(index int) {
 }
 
 func (p *Player) AddTracks(tracks ...Track) {
+	tracks = cloneTracks(tracks)
 	p.updateConfig(func(cfg *Config) {
 		cfg.Tracks = append(cfg.Tracks, tracks...)
 	})
@@ -244,6 +245,7 @@ func (p *Player) ShuffleUpcoming() {
 }
 
 func (p *Player) SetTrack(index int, track Track) {
+	track = cloneTrack(track)
 	p.updateConfig(func(cfg *Config) {
 		if index < 0 || index >= len(cfg.Tracks) {
 			return

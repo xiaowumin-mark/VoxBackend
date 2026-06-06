@@ -50,48 +50,55 @@ func main() {
 		}
 	}
 	Cfg.Callbacks.OnPausedChanged = func(s player.State) {
-		if Io == nil {
-			return
+		if Io != nil {
+			Io.Emit("PausedChanged", map[string]any{
+				"paused":   s.Paused,
+				"position": s.Position.Milliseconds(),
+				"duration": s.Duration.Milliseconds(),
+			})
 		}
-		Io.Emit("PausedChanged", map[string]any{
-			"paused":   s.Paused,
-			"position": s.Position.Milliseconds(),
-			"duration": s.Duration.Milliseconds(),
-		})
-		if s.Paused {
-			Clientws.SendPaused()
-		} else {
-			Clientws.SendResumed()
+		if Clientws != nil {
+			if s.Paused {
+				Clientws.SendPaused()
+			} else {
+				Clientws.SendResumed()
+			}
 		}
 	}
 	Cfg.Callbacks.OnTrackChanged = func(s player.State) {
-		if Io == nil {
+		if s.Track == nil {
 			return
 		}
-		Io.Emit("OnTrackChanged", map[string]any{
-			"paused":   s.Paused,
-			"position": s.Position.Milliseconds(),
-			"duration": s.Duration.Milliseconds(),
-			"id":       s.Track.Meta["id"],
-		})
-		Clientws.SendMusic(amllwsclient.MusicInfo{
-			MusicID:   s.Track.Meta["id"].(string),
-			Artists:   []amllwsclient.Artist{{Name: s.Track.Album}},
-			AlbumName: s.Track.Album,
-			MusicName: s.Track.Title,
-			Duration:  uint64(s.Duration.Milliseconds()),
-		})
+		musicID := trackMetaString(s.Track, "id")
+		if Io != nil {
+			Io.Emit("OnTrackChanged", map[string]any{
+				"paused":   s.Paused,
+				"position": s.Position.Milliseconds(),
+				"duration": s.Duration.Milliseconds(),
+				"id":       musicID,
+			})
+		}
+		if Clientws != nil {
+			Clientws.SendMusic(amllwsclient.MusicInfo{
+				MusicID:   musicID,
+				Artists:   []amllwsclient.Artist{{Name: s.Track.Artist}},
+				AlbumName: s.Track.Album,
+				MusicName: s.Track.Title,
+				Duration:  uint64(s.Duration.Milliseconds()),
+			})
+		}
 	}
 	Cfg.Callbacks.OnState = func(s player.State) {
-		if Io == nil {
-			return
+		if Io != nil {
+			Io.Emit("OnState", map[string]any{
+				"paused":   s.Paused,
+				"position": s.Position.Milliseconds(),
+				"duration": s.Duration.Milliseconds(),
+			})
 		}
-		Io.Emit("OnState", map[string]any{
-			"paused":   s.Paused,
-			"position": s.Position.Milliseconds(),
-			"duration": s.Duration.Milliseconds(),
-		})
-		Clientws.SendProgress(uint64(s.Position.Milliseconds()))
+		if Clientws != nil {
+			Clientws.SendProgress(uint64(s.Position.Milliseconds()))
+		}
 
 		if s.Track != nil {
 			status := fmt.Sprintf("🎵 %s — %s  %s / %s   🔊 %.0f%% 🎤 %.0f%%",
@@ -131,15 +138,15 @@ func main() {
 		})
 	}
 	Cfg.Callbacks.OnPlaylistChanged = func(s player.State) {
-		if Io == nil {
+		if Io == nil || Player == nil {
 			return
 		}
 		tracks := Player.Playlist()
 		list := make([]map[string]any, 0, len(tracks))
 		for _, t := range tracks {
 			list = append(list, map[string]any{
-				"id":          t.Meta["id"],
-				"duration":    t.Meta["duration"],
+				"id":          trackMetaString(&t, "id"),
+				"duration":    trackMetaValue(&t, "duration"),
 				"filePath":    t.Path,
 				"songAlbum":   t.Album,
 				"songArtists": t.Artist,
@@ -166,13 +173,13 @@ func main() {
 		ReconnectInterval: 1 * time.Second,
 		OnConnected: func() {
 			Con.Log("🌐 AMLL Player 已连接")
+			if Clientws == nil || Player == nil {
+				return
+			}
 			Clientws.SendVolume(Cfg.MasterVolume)
 			s := Player.Snapshot()
 			if s.Track != nil {
-				var musicID string
-				if id, ok := s.Track.Meta["id"].(string); ok {
-					musicID = id
-				}
+				musicID := trackMetaString(s.Track, "id")
 				Clientws.SendMusic(amllwsclient.MusicInfo{
 					MusicID:   musicID,
 					MusicName: s.Track.Title,
@@ -181,7 +188,7 @@ func main() {
 					Duration:  uint64(s.Duration.Milliseconds()),
 				})
 				Clientws.SendProgress(uint64(s.Position.Milliseconds()))
-				if !s.Paused {
+				if s.Paused {
 					Clientws.SendPaused()
 				} else {
 					Clientws.SendResumed()
@@ -189,6 +196,9 @@ func main() {
 			}
 		},
 		OnCommand: func(cmd *amllwsclient.Command) {
+			if Player == nil {
+				return
+			}
 			switch cmd.Type {
 			case amllwsclient.CmdPause:
 				Player.SetPaused(true)
@@ -202,7 +212,7 @@ func main() {
 				Player.SetMasterVolume(cmd.Volume)
 				Con.Log("🔊 音量: %.0f%%", cmd.Volume*100)
 			case amllwsclient.CmdSeekPlayProgress:
-				Player.SeekTo((time.Duration(cmd.Progress) / 1000) * time.Second)
+				Player.SeekTo(time.Duration(cmd.Progress) * time.Millisecond)
 			}
 		},
 		OnStatusChange: func(st amllwsclient.Status) {
@@ -232,6 +242,24 @@ func formatDuration(d time.Duration) string {
 	m := int(d.Minutes())
 	s := int(d.Seconds()) % 60
 	return fmt.Sprintf("%02d:%02d", m, s)
+}
+
+func trackMetaValue(t *player.Track, key string) any {
+	if t == nil || t.Meta == nil {
+		return nil
+	}
+	return t.Meta[key]
+}
+
+func trackMetaString(t *player.Track, key string) string {
+	v := trackMetaValue(t, key)
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprint(v)
 }
 
 func truncateStr(s string, n int) string {

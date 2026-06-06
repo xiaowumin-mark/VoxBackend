@@ -63,9 +63,12 @@ type Client struct {
 
 	status atomic.Int32
 
-	mu       sync.Mutex
-	done     chan struct{} // closed on complete shutdown
-	cancelFn context.CancelFunc
+	mu        sync.Mutex
+	done      chan struct{} // closed on complete shutdown
+	cancelFn  context.CancelFunc
+	startOnce sync.Once
+	doneOnce  sync.Once
+	started   atomic.Bool
 
 	// Rust: seek debounce
 	lastSeekTime time.Time
@@ -95,14 +98,26 @@ func New(cfg Config) *Client {
 
 // Rust: run_websocket_client — 异步连接，立即返回
 func (c *Client) Connect() {
-	go c.connectLoop()
+	c.startOnce.Do(func() {
+		c.started.Store(true)
+		go c.connectLoop()
+	})
 }
 
 // Rust: shutdown_rx → 优雅关闭
 func (c *Client) Close() {
 	c.cancelFn()
-	if c.inner != nil {
-		c.inner.close()
+	c.mu.Lock()
+	inner := c.inner
+	c.mu.Unlock()
+	if inner != nil {
+		inner.close()
+	}
+	if !c.started.Load() {
+		c.doneOnce.Do(func() {
+			close(c.done)
+		})
+		return
 	}
 	<-c.done
 }
@@ -178,7 +193,9 @@ func (c *Client) sendRaw(msg []byte) {
 // ── 内部连接循环（对齐 Rust worker.rs amll_connector_actor 的连接管理） ──
 
 func (c *Client) connectLoop() {
-	defer close(c.done)
+	defer c.doneOnce.Do(func() {
+		close(c.done)
+	})
 
 	for {
 		if c.ctx.Err() != nil {

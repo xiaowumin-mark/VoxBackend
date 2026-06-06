@@ -1,12 +1,15 @@
 package player
 
 import (
+	"sync"
+
 	"github.com/gopxl/beep/v2"
 	"github.com/xiaowumin-mark/VoxBackend/audio"
 	"github.com/xiaowumin-mark/VoxBackend/dsp"
 )
 
 type dspStreamer struct {
+	mu          sync.Mutex
 	ring        *audio.Ring
 	mixer       *audio.Mixer
 	vocalChain  *dsp.Chain
@@ -45,12 +48,17 @@ func (s *dspStreamer) Stream(samples [][2]float64) (int, bool) {
 
 	nPairs, ok := s.ring.ReadPairs(s.vocalBuf[:n], s.accompBuf[:n])
 	if !ok {
+		s.mu.Lock()
 		s.err = s.ring.Err()
+		s.mu.Unlock()
 		return 0, false
 	}
 
 	vox := s.vocalBuf[:nPairs]
 	acc := s.accompBuf[:nPairs]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if s.bypassed && s.fadingRemain == 0 {
 		for i := 0; i < nPairs; i++ {
@@ -106,21 +114,19 @@ func (s *dspStreamer) Stream(samples [][2]float64) (int, bool) {
 }
 
 func (s *dspStreamer) OnVocalGainChanged(gain float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.mode != DSPModeAuto {
 		return
 	}
 
-	intensity := 1.0 - gain
-	if intensity < 0 {
-		intensity = 0
-	}
-	if intensity > 1.5 {
-		intensity = 1.5
-	}
-
+	intensity := dspIntensityFromGain(gain)
 	targetBypassed := intensity < 0.05
 
-	if targetBypassed != s.bypassed && s.fadingRemain <= 0 {
+	if targetBypassed == s.bypassed {
+		s.fadingRemain = 0
+	} else if s.fadingRemain <= 0 || s.fadingToBypass != targetBypassed {
 		s.fadingRemain = crossfadeDurationSamples
 		s.fadingToBypass = targetBypassed
 	}
@@ -130,7 +136,62 @@ func (s *dspStreamer) OnVocalGainChanged(gain float64) {
 	}
 }
 
+func (s *dspStreamer) SetInitialVocalGain(gain float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.mode != DSPModeAuto {
+		return
+	}
+
+	intensity := dspIntensityFromGain(gain)
+	s.fadingRemain = 0
+	s.fadingToBypass = false
+	s.bypassed = intensity < 0.05
+	if !s.bypassed {
+		dsp.ApplyIntensityToChains(s.vocalChain, s.accompChain, intensity)
+	}
+}
+
+func (s *dspStreamer) SetInitialBypassed(bypassed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if bypassed {
+		s.mode = DSPModeOff
+	}
+	s.bypassed = bypassed
+	s.fadingRemain = 0
+	s.fadingToBypass = bypassed
+}
+
+func (s *dspStreamer) SetModeImmediate(mode DSPMode, gain float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.mode = mode
+	s.fadingRemain = 0
+	switch mode {
+	case DSPModeOff:
+		s.bypassed = true
+		s.fadingToBypass = true
+	case DSPModeOn:
+		s.bypassed = false
+		s.fadingToBypass = false
+	case DSPModeAuto:
+		intensity := dspIntensityFromGain(gain)
+		s.bypassed = intensity < 0.05
+		s.fadingToBypass = s.bypassed
+		if !s.bypassed {
+			dsp.ApplyIntensityToChains(s.vocalChain, s.accompChain, intensity)
+		}
+	}
+}
+
 func (s *dspStreamer) SetMode(mode DSPMode) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.mode = mode
 	switch mode {
 	case DSPModeOff:
@@ -150,6 +211,8 @@ func (s *dspStreamer) startCrossfadeToBypass(targetBypass bool) {
 }
 
 func (s *dspStreamer) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.err
 }
 
@@ -187,6 +250,17 @@ func clampFloat(v, x float64) float64 {
 		return v
 	}
 	return x
+}
+
+func dspIntensityFromGain(gain float64) float64 {
+	intensity := 1.0 - gain
+	if intensity < 0 {
+		return 0
+	}
+	if intensity > 1.5 {
+		return 1.5
+	}
+	return intensity
 }
 
 var _ beep.Streamer = (*audio.RealtimeStreamer)(nil)

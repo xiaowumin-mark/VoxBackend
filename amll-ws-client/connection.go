@@ -58,13 +58,17 @@ func newConn(url string, dialer *websocket.Dialer, handler commandHandler) *conn
 
 // Rust: connect_async with CONNECT_TIMEOUT_DURATION
 func (c *conn) dial(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
+	timeout := c.dialer.HandshakeTimeout
+	if timeout <= 0 {
+		timeout = connectTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	ws, resp, err := c.dialer.DialContext(ctx, c.url, http.Header{})
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("连接超时 (超过 %v)", connectTimeout)
+			return fmt.Errorf("连接超时 (超过 %v)", timeout)
 		}
 		return fmt.Errorf("连接握手失败: %w", err)
 	}
@@ -119,8 +123,8 @@ func (c *conn) run() error {
 		// 模拟 biased select：外层优先检查 shutdown
 		select {
 		case <-c.shutdown:
-			c.ws.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			c.writeCloseFrame()
+			c.closeSocket()
 			wg.Wait()
 			return nil
 		default:
@@ -128,8 +132,8 @@ func (c *conn) run() error {
 
 		select {
 		case <-c.shutdown:
-			c.ws.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			c.writeCloseFrame()
+			c.closeSocket()
 			wg.Wait()
 			return nil
 
@@ -138,6 +142,7 @@ func (c *conn) run() error {
 				runErr = fmt.Errorf("主发送通道已关闭")
 				goto done
 			}
+			_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.ws.WriteMessage(websocket.TextMessage, msg); err != nil {
 				runErr = fmt.Errorf("发送消息失败: %w", err)
 				goto done
@@ -155,6 +160,7 @@ func (c *conn) run() error {
 
 		case <-pingTicker.C:
 			// Rust: 发送应用层 Ping
+			_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.ws.WriteMessage(websocket.TextMessage, marshalPing()); err != nil {
 				runErr = fmt.Errorf("发送 Ping 失败: %w", err)
 				goto done
@@ -167,6 +173,7 @@ func (c *conn) run() error {
 		}
 	}
 done:
+	c.closeSocket()
 	wg.Wait()
 	return runErr
 }
@@ -181,6 +188,7 @@ func (c *conn) handleMessage(raw []byte, waitingForPong *bool) error {
 	case PayloadPing:
 		// Rust: trace!("收到服务器的 Ping。回复 Pong。")
 		pong := marshalPong()
+		_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
 		if err := c.ws.WriteMessage(websocket.TextMessage, pong); err != nil {
 			return fmt.Errorf("回复 Pong 失败: %w", err)
 		}
@@ -215,14 +223,34 @@ func (c *conn) handleMessage(raw []byte, waitingForPong *bool) error {
 func (c *conn) close() {
 	c.closeOnce.Do(func() {
 		close(c.shutdown)
+		c.closeSocket()
 	})
 }
 
 func (c *conn) send(msg []byte) bool {
 	select {
+	case <-c.shutdown:
+		return false
 	case c.outgoing <- msg:
 		return true
 	default:
 		return false
+	}
+}
+
+func (c *conn) writeCloseFrame() {
+	if c.ws == nil {
+		return
+	}
+	_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
+	_ = c.ws.WriteMessage(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+	)
+}
+
+func (c *conn) closeSocket() {
+	if c.ws != nil {
+		_ = c.ws.Close()
 	}
 }
