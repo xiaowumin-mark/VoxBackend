@@ -14,5 +14,6 @@ AGENTS.md
 /.idea
 /.vscode-test
 /player-plugin/node_modules
+/player-plugin/.action-build
 /ref
 /.gocache

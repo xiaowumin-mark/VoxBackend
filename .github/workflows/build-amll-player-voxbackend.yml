@@ -13,6 +13,7 @@ on:
       - "audio/**"
       - "dsp/**"
       - "player/**"
+      - "player-plugin/**"
       - "separator/**"
       - "go.mod"
       - "go.sum"
@@ -25,6 +26,7 @@ on:
       - "audio/**"
       - "dsp/**"
       - "player/**"
+      - "player-plugin/**"
       - "separator/**"
       - "go.mod"
       - "go.sum"
@@ -32,6 +34,7 @@ on:
 
 env:
   GO_VERSION: "1.25.1"
+  NODE_VERSION: "22"
   ORT_VERSION: "1.25.1"
   ORT_URL: "https://github.com/microsoft/onnxruntime/releases/download/v1.25.1/onnxruntime-win-x64-1.25.1.zip"
   UMXL_VOCALS_URL: "https://huggingface.co/chinedudave06/demucs-onnx/resolve/main/umxl_vocals.onnx"
@@ -62,6 +65,13 @@ jobs:
           cache: true
           cache-dependency-path: VoxBackend/go.sum
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: VoxBackend/player-plugin/package-lock.json
+
       - name: Install gogio
         working-directory: VoxBackend
         shell: pwsh
@@ -80,6 +90,17 @@ jobs:
           gogio -target windows -o ".build\VoxBackend-AMLL.exe" ".\Amll-Player-Voxbackend"
           if (-not (Test-Path ".build\VoxBackend-AMLL.exe")) {
             throw "gogio build did not produce .build\VoxBackend-AMLL.exe"
+          }
+
+      - name: Build AMLL JavaScript plugin
+        working-directory: VoxBackend/player-plugin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          npm ci
+          npm run build:action
+          if (-not (Test-Path ".action-build\vox-backend v0.0.1.js")) {
+            throw "plugin build did not produce .action-build\vox-backend v0.0.1.js"
           }
 
       - name: Download ONNX Runtime and bundled models
@@ -114,15 +135,13 @@ jobs:
             throw "UVR_MDXNET_KARA_2.onnx was not downloaded"
           }
 
-      - name: Package release zip
+      - name: Stage package files
         working-directory: VoxBackend
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $packageRoot = "dist\$env:APP_NAME"
-          $zipPath = "dist\$env:APP_NAME-windows-x64.zip"
           Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
 
           New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
           Copy-Item ".build\VoxBackend-AMLL.exe" (Join-Path $packageRoot "VoxBackend-AMLL.exe") -Force
@@ -137,6 +156,9 @@ jobs:
           Copy-Item ".downloads\models\umxl_vocals.onnx" (Join-Path $packageRoot "onnx\umxl_vocals.onnx") -Force
           Copy-Item ".downloads\models\UVR_MDXNET_KARA_2.onnx" (Join-Path $packageRoot "onnx\UVR_MDXNET_KARA_2.onnx") -Force
 
+          New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot "extensions") | Out-Null
+          Copy-Item "player-plugin\.action-build\vox-backend v0.0.1.js" (Join-Path $packageRoot "extensions\vox-backend v0.0.1.js") -Force
+
           $readme = @"
           VoxBackend AMLL Player Windows x64
 
@@ -149,18 +171,20 @@ jobs:
           Bundled ONNX models:
           - .\onnx\umxl_vocals.onnx
           - .\onnx\UVR_MDXNET_KARA_2.onnx
+
+          Bundled AMLL plugin:
+          - .\extensions\vox-backend v0.0.1.js
           "@
           $readme.Trim() | Set-Content -Path (Join-Path $packageRoot "README.txt") -Encoding utf8
 
-          Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zipPath -Force
-          if (-not (Test-Path $zipPath)) {
-            throw "Package zip was not created"
+          if (-not (Test-Path (Join-Path $packageRoot "VoxBackend-AMLL.exe"))) {
+            throw "Package staging failed"
           }
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
           name: VoxBackend-AMLL-windows-x64
-          path: VoxBackend/dist/VoxBackend-AMLL-windows-x64.zip
+          path: VoxBackend/dist/VoxBackend-AMLL/**
           if-no-files-found: error
           retention-days: 30

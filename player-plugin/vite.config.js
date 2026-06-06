@@ -13,11 +13,38 @@ import react from '@vitejs/plugin-react'
 import pkg from './package.json'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { transform } from 'esbuild'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-export default defineConfig({
-  plugins: [react({ jsxRuntime: 'classic' })],
+const actionOutputMinifyPlugin = () => ({
+  name: 'vox-action-output-minify',
+  apply: 'build',
+  async generateBundle(_options, bundle) {
+    for (const item of Object.values(bundle)) {
+      if (item.type !== 'chunk' || !item.fileName.endsWith('.js')) continue;
+
+      const result = await transform(item.code, {
+        loader: 'js',
+        minify: true,
+        drop: ['console', 'debugger'],
+        legalComments: 'none',
+        target: 'es2020',
+      });
+      item.code = `${amllMeta}\n${result.code}`;
+      item.map = null;
+    }
+  },
+})
+
+export default defineConfig(({ mode }) => {
+  const isActionBuild = mode === 'action'
+
+  return {
+  plugins: [
+    react({ jsxRuntime: 'classic' }),
+    ...(isActionBuild ? [actionOutputMinifyPlugin()] : []),
+  ],
   resolve: {
     alias: {
       react: resolve(__dirname, 'src/shims/react-global.js'),
@@ -25,14 +52,14 @@ export default defineConfig({
     },
   },
   esbuild: {
-    //drop: ['debugger','console'],
+    drop: isActionBuild ? ['console', 'debugger'] : [],
     banner: amllMeta, // 确保这里有明确定义
   },
   build: {
     outDir: 'C:/Users/xiaow/AppData/Roaming/net.stevexmh.amllplayer/extensions',
-    minify: process.env.NODE_ENV === 'production',
-    sourcemap: process.env.NODE_ENV !== 'production',
-    watch: process.env.NODE_ENV !== 'production' ? {
+    minify: isActionBuild || process.env.NODE_ENV === 'production',
+    sourcemap: isActionBuild ? false : process.env.NODE_ENV !== 'production',
+    watch: !isActionBuild && process.env.NODE_ENV !== 'production' ? {
       include: 'src/**',
       exclude: 'node_modules/**',
       // 防抖配置（单位：毫秒）
@@ -64,4 +91,5 @@ export default defineConfig({
     exclude: ['jotai'] // 确保不优化这些依赖
   }
 
+  }
 })
