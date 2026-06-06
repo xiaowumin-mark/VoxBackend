@@ -72,6 +72,15 @@ jobs:
           cache: npm
           cache-dependency-path: VoxBackend/player-plugin/package-lock.json
 
+      - name: Restore bundled binary download cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            VoxBackend/.downloads/onnxruntime
+            VoxBackend/.downloads/models
+            VoxBackend/.downloads/onnxruntime-win-x64-${{ env.ORT_VERSION }}.zip
+          key: amll-player-binary-assets-${{ runner.os }}-ort-${{ env.ORT_VERSION }}-models-v1
+
       - name: Install gogio
         working-directory: VoxBackend
         shell: pwsh
@@ -106,13 +115,93 @@ jobs:
       - name: Download ONNX Runtime and bundled models
         working-directory: VoxBackend
         shell: pwsh
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path ".downloads" | Out-Null
+          if ([string]::IsNullOrWhiteSpace($env:HF_TOKEN)) {
+            Write-Host "HF_TOKEN secret is not set; Hugging Face model downloads will be anonymous and may be rate limited."
+          } else {
+            Write-Host "HF_TOKEN secret is set; Hugging Face model downloads will use authenticated requests."
+          }
+
+          function Test-UsableFile {
+            param(
+              [Parameter(Mandatory = $true)][string]$Path,
+              [int64]$MinBytes = 1
+            )
+            return (Test-Path $Path) -and ((Get-Item $Path).Length -ge $MinBytes)
+          }
+
+          function Invoke-DownloadWithBackoff {
+            param(
+              [Parameter(Mandatory = $true)][string]$Url,
+              [Parameter(Mandatory = $true)][string]$OutFile,
+              [Parameter(Mandatory = $true)][string]$Name,
+              [int64]$MinBytes = 1,
+              [switch]$UseHuggingFaceToken
+            )
+
+            if (Test-UsableFile -Path $OutFile -MinBytes $MinBytes) {
+              Write-Host "$Name already exists in cache: $OutFile"
+              return
+            }
+
+            $parent = Split-Path -Parent $OutFile
+            New-Item -ItemType Directory -Force -Path $parent | Out-Null
+
+            $curlArgs = @(
+              "-L",
+              "--fail",
+              "--retry", "3",
+              "--retry-all-errors",
+              "--retry-delay", "5",
+              "--connect-timeout", "30",
+              "--max-time", "1800",
+              "--user-agent", "VoxBackend-AMLL-CI/1.0",
+              "-o", $OutFile
+            )
+            if ($UseHuggingFaceToken -and -not [string]::IsNullOrWhiteSpace($env:HF_TOKEN)) {
+              $curlArgs += @("-H", "Authorization: Bearer $env:HF_TOKEN")
+            }
+            $curlArgs += $Url
+
+            $delays = @(15, 30, 60, 120, 240, 300, 300, 300)
+            for ($attempt = 0; $attempt -lt $delays.Count; $attempt++) {
+              if (Test-Path $OutFile) {
+                Remove-Item -LiteralPath $OutFile -Force
+              }
+
+              Write-Host "Downloading $Name (attempt $($attempt + 1) of $($delays.Count))"
+              & curl.exe @curlArgs
+              if ($LASTEXITCODE -eq 0 -and (Test-UsableFile -Path $OutFile -MinBytes $MinBytes)) {
+                Write-Host "$Name downloaded: $OutFile"
+                return
+              }
+
+              if ($attempt -lt ($delays.Count - 1)) {
+                $delay = $delays[$attempt]
+                Write-Host "$Name download failed, retrying in $delay seconds"
+                Start-Sleep -Seconds $delay
+              }
+            }
+
+            throw "$Name was not downloaded. If Hugging Face returned HTTP 429, add a repository secret named HF_TOKEN or rerun after the rate limit cools down."
+          }
 
           $ortZip = ".downloads\onnxruntime-win-x64-$env:ORT_VERSION.zip"
-          curl.exe -L --fail --retry 5 --retry-delay 5 -o $ortZip $env:ORT_URL
-          Expand-Archive -Path $ortZip -DestinationPath ".downloads\onnxruntime" -Force
+          $runtimeDll = ".downloads\onnxruntime\onnxruntime-win-x64-$env:ORT_VERSION\lib\onnxruntime.dll"
+          if (-not (Test-Path $runtimeDll)) {
+            Invoke-DownloadWithBackoff -Url $env:ORT_URL -OutFile $ortZip -Name "ONNX Runtime" -MinBytes 10000000
+            Expand-Archive -Path $ortZip -DestinationPath ".downloads\onnxruntime" -Force
+          } else {
+            Write-Host "ONNX Runtime already exists in cache"
+          }
+
+          New-Item -ItemType Directory -Force -Path ".downloads\models" | Out-Null
+          Invoke-DownloadWithBackoff -Url $env:UMXL_VOCALS_URL -OutFile ".downloads\models\umxl_vocals.onnx" -Name "umxl_vocals.onnx" -MinBytes 1000000 -UseHuggingFaceToken
+          Invoke-DownloadWithBackoff -Url $env:KARA2_URL -OutFile ".downloads\models\UVR_MDXNET_KARA_2.onnx" -Name "UVR_MDXNET_KARA_2.onnx" -MinBytes 1000000 -UseHuggingFaceToken
 
           $runtimeRoot = Get-ChildItem ".downloads\onnxruntime" -Directory |
             Where-Object { $_.Name -like "onnxruntime-win-x64-*" } |
@@ -123,10 +212,6 @@ jobs:
           if (-not (Test-Path (Join-Path $runtimeRoot.FullName "lib\onnxruntime.dll"))) {
             throw "Cannot find ONNX Runtime DLL in extracted archive"
           }
-
-          New-Item -ItemType Directory -Force -Path ".downloads\models" | Out-Null
-          curl.exe -L --fail --retry 5 --retry-delay 5 -o ".downloads\models\umxl_vocals.onnx" $env:UMXL_VOCALS_URL
-          curl.exe -L --fail --retry 5 --retry-delay 5 -o ".downloads\models\UVR_MDXNET_KARA_2.onnx" $env:KARA2_URL
 
           if (-not (Test-Path ".downloads\models\umxl_vocals.onnx")) {
             throw "umxl_vocals.onnx was not downloaded"
