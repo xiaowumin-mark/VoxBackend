@@ -3,7 +3,6 @@ import gsap from "gsap";
 import { VoxBackendStates } from "./store";
 import { GetIo } from "./ws";
 import PlaylistOverlay from './overlay';
-import { GetPlaylists, GetSongById } from './db';
 const { useEffect, useRef, useState, useCallback, useLayoutEffect } = React;
 const { createPortal } = ReactDOM;
 // Jotai
@@ -120,9 +119,9 @@ function MainContext() {
     }, [dspMode]);
 
     const [needShufflePlay, setNeedShufflePlay] = useAtom(VoxBackendStates.NeedShufflePlay);
-    const [nowPlayListName] = useAtom(VoxBackendStates.NowPlayListName);
     const [nowPlayList] = useAtom(VoxBackendStates.NowPlayList);
     const [currentTrackId] = useAtom(VoxBackendStates.CurrentTrackId);
+    const [currentTrackIndex] = useAtom(VoxBackendStates.CurrentTrackIndex);
 
     useEffect(() => {
         if (!container) return;
@@ -225,28 +224,11 @@ function MainContext() {
     }, [isShowPlaylist, container]);
 
     useEffect(() => {
-        if (!container || !nowPlayListName) return;
-        GetPlaylists().then(lists => {
-            const pl = lists.find(l => l.name === nowPlayListName);
-            if (!pl) return;
-            Promise.all(pl.songIds.map(id => GetSongById(id))).then(songs => {
-                const tracks = songs.filter(Boolean).map(s => ({
-                    id: s.id,
-                    duration: s.duration,
-                    filePath: s.filePath,
-                    songAlbum: s.songAlbum,
-                    songArtists: s.songArtists,
-                    songName: s.songName,
-                }));
-                GetIo()?.emit("rm-all-songs");
-                GetIo()?.emit("songs", tracks);
-            });
-        });
-    }, [nowPlayListName, container]);
-
-    useEffect(() => {
         if (!needShufflePlay || nowPlayList.length < 2) return;
-        GetIo()?.emit("shuffle-upcoming");
+        GetIo()?.emit("shuffle-upcoming", {
+            currentIndex: currentTrackIndex,
+            currentId: currentTrackId,
+        });
         setNeedShufflePlay(false);
     }, [needShufflePlay]);
 

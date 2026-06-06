@@ -3,15 +3,12 @@ import MainContext from './context';
 import LoadCssHoudini from './smooth-corners';
 import { ConnectBackend } from './ws';
 import { VoxBackendStates } from './store';
-import { GetSongs } from './db';
+import { SyncPlaylistToBackend } from './db';
 LoadCssHoudini();
-extensionContext.addEventListener('extension-load', function () {
-    console.log('load');
 
-
-    // 创建一个style 到meta
-    const style = document.createElement('style');
-    style.textContent = `
+// 创建一个style 到meta
+const style = document.createElement('style');
+style.textContent = `
     @keyframes shine-move {
 	0% {
 		mask-position: 100% 0;
@@ -87,17 +84,49 @@ extensionContext.addEventListener('extension-load', function () {
 .playlist {
 	display: flex;
 	flex-direction: column;
+	min-height: 0;
+	contain: layout paint;
 
 }
 
 .playlist_item {
 	display: flex;
+	position: relative;
 	width: 100%;
 	height: 10vh;
 	align-items: center;
 	justify-content: space-between;
 	box-sizing: border-box;
 	padding-top: 1vh;
+	flex-shrink: 0;
+	user-select: none;
+	will-change: transform;
+	transition: opacity 0.18s ease;
+}
+
+.playlist_item_current {
+	transform: translateX(0.6vh);
+}
+
+.playlist_item_current .playlist_item_info_title {
+	color: #fff;
+	text-shadow: 0 0 8px rgba(255,255,255,0.35);
+}
+
+.playlist_item_dragging {
+	opacity: 1;
+	box-shadow: none;
+}
+
+.playlist_item_floating {
+	opacity: 1;
+	transition: none !important;
+	filter: none;
+	box-shadow: none;
+}
+
+.playlist_dragging .playlist_item_endicon {
+	cursor: grabbing;
 }
 
 .playlist_item_img {
@@ -145,108 +174,105 @@ extensionContext.addEventListener('extension-load', function () {
 .playlist_item_endicon {
 	width: 5vh;
 	height: 5vh;
+	flex-shrink: 0;
 	mask-image: paint(smooth-corners);
 	--smooth-corners: "2";
 	display: flex;
 	justify-content: center;
 	align-items: center;
+	touch-action: none;
 
 	svg {
 		transform: scale(1.2);
 	}
 }
         `
-    document.head.appendChild(style);
+document.head.appendChild(style);
 
-    extensionContext.registerComponent("settings", Setting)
-    extensionContext.registerComponent("context", MainContext);
+extensionContext.addEventListener('extension-load', function () {
+	console.log('load');
 
-    let handlersRegistered = false;
-    ConnectBackend((io) => {
-        console.log("Connect Backend");
-        extensionContext.jotaiStore.set(VoxBackendStates.WsIsConect, true)
 
-        const store = extensionContext.jotaiStore;
+	extensionContext.registerComponent("settings", Setting)
+	extensionContext.registerComponent("context", MainContext);
 
-        if (!handlersRegistered) {
-            handlersRegistered = true;
-            io.on("PausedChanged", (d) => {
-                console.log("PausedChanged", d);
-            })
-            io.on("Event", (d) => {
-                console.log(`[${d.type}] `, d.message);
-                switch (d.type) {
-                    case "crossfade_started":
+	let handlersRegistered = false;
+	ConnectBackend((io) => {
+		console.log("Connect Backend");
+		extensionContext.jotaiStore.set(VoxBackendStates.WsIsConect, true)
 
-                        store.set(VoxBackendStates.Crossfadeing, true)
-                        break;
-                    case "track_changed":
-                        store.set(VoxBackendStates.Crossfadeing, false)
-                        break;
-                }
-                const prev = store.get(VoxBackendStates.EventLog);
-                store.set(VoxBackendStates.EventLog, [
-                    { type: d.type, message: d.message, time: Date.now() },
-                    ...prev
-                ].slice(0, 50));
-            })
-            io.on("OnTrackChanged", (d) => {
-                console.log("OnTrackChanged", d);
-                store.set(VoxBackendStates.CurrentTrackId, d.id);
-                extensionContext.playerDB.table('songs').get(d.id).then(song => {
-                    if (song) {
-                        console.log(song);
-                        if (song.lyricFormat == "ttml") {
-                            console.log(extensionContext.lyric.parseTTML(song.lyric));
-                            store.set(
-                                extensionContext.amllStates.musicLyricLinesAtom,
-                                extensionContext.lyric.parseTTML(song.lyric).lines
-                            )
-                        }
-                        // cover File类型
-                        // 生成链接
-                        const cover = URL.createObjectURL(new Blob([song.cover], { type: song.type }));
-                        console.log(cover);
-                        store.set(
-                            extensionContext.amllStates.musicCoverAtom,
-                            cover
-                        )
-                    }
-                })
-            })
-            io.on("OnState", (d) => {
-                // console.log("OnState", d);
-            })
-            io.on("OnVolumeChanged", (d) => {
-                console.log("OnVolumeChanged", d);
-            })
-            io.on("OnVocalChanged", (d) => {
-                console.log("OnVocalChanged", d);
-                // id 查找歌曲
-            })
-            io.on("playlist", (d) => {
-                store.set(VoxBackendStates.NowPlayList, d);
-            })
-        }
+		const store = extensionContext.jotaiStore;
 
-        GetSongs().then(songs => {
-            io.emit("rm-all-songs")
-            io.emit("songs", songs.map(song => {
-                return {
-                    id: song.id,
-                    duration: song.duration,
-                    filePath: song.filePath,
-                    songAlbum: song.songAlbum,
-                    songArtists: song.songArtists,
-                    songName: song.songName
-                }
-            }))
-        })
-    }, () => {
-        extensionContext.jotaiStore.set(VoxBackendStates.WsIsConect, false)
-    });
+		if (!handlersRegistered) {
+			handlersRegistered = true;
+			io.on("PausedChanged", (d) => {
+				console.log("PausedChanged", d);
+			})
+			io.on("Event", (d) => {
+				console.log(`[${d.type}] `, d.message);
+				switch (d.type) {
+					case "crossfade_started":
+
+						store.set(VoxBackendStates.Crossfadeing, true)
+						break;
+					case "track_changed":
+						store.set(VoxBackendStates.Crossfadeing, false)
+						break;
+				}
+				const prev = store.get(VoxBackendStates.EventLog);
+				store.set(VoxBackendStates.EventLog, [
+					{ type: d.type, message: d.message, time: Date.now() },
+					...prev
+				].slice(0, 50));
+			})
+			io.on("OnTrackChanged", (d) => {
+				console.log("OnTrackChanged", d);
+				store.set(VoxBackendStates.CurrentTrackId, d.id);
+				const trackIndex = Number(d.index);
+				store.set(VoxBackendStates.CurrentTrackIndex, Number.isFinite(trackIndex) ? trackIndex : -1);
+				extensionContext.playerDB.table('songs').get(d.id).then(song => {
+					if (song) {
+						console.log(song);
+						if (song.lyricFormat == "ttml") {
+							console.log(extensionContext.lyric.parseTTML(song.lyric));
+							store.set(
+								extensionContext.amllStates.musicLyricLinesAtom,
+								extensionContext.lyric.parseTTML(song.lyric).lines
+							)
+						}
+						// cover File类型
+						// 生成链接
+						const cover = URL.createObjectURL(new Blob([song.cover], { type: song.type }));
+						console.log(cover);
+						store.set(
+							extensionContext.amllStates.musicCoverAtom,
+							cover
+						)
+					}
+				})
+			})
+			io.on("OnState", (d) => {
+				// console.log("OnState", d);
+			})
+			io.on("OnVolumeChanged", (d) => {
+				console.log("OnVolumeChanged", d);
+			})
+			io.on("OnVocalChanged", (d) => {
+				console.log("OnVocalChanged", d);
+				// id 查找歌曲
+			})
+			io.on("playlist", (d) => {
+				store.set(VoxBackendStates.NowPlayList, d);
+			})
+		}
+
+		SyncPlaylistToBackend(io, store.get(VoxBackendStates.NowPlayListName))
+			.catch(err => console.error("Failed to sync VoxBackend playlist", err));
+	}, () => {
+		extensionContext.jotaiStore.set(VoxBackendStates.WsIsConect, false)
+	});
 });
 extensionContext.addEventListener('extension-unload', function () {
-    console.log('unload');
+	console.log('unload');
 });
 

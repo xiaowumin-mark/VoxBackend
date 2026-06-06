@@ -35,4 +35,5 @@ export const VoxBackendStates = {
     EventLog: atom([]),
     IsShowPlaylist:   atom(false),
     CurrentTrackId:   atom(''),
+    CurrentTrackIndex: atom(-1),
 }

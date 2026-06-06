@@ -184,6 +184,7 @@ func (c *appController) callbacks() player.Callbacks {
 					"position": s.Position.Milliseconds(),
 					"duration": s.Duration.Milliseconds(),
 					"id":       musicID,
+					"index":    s.TrackIndex,
 				})
 			}
 			c.withClient(func(client *amllwsclient.Client) {
@@ -237,9 +238,11 @@ func (c *appController) callbacks() player.Callbacks {
 			}
 			tracks := Player.Playlist()
 			list := make([]map[string]any, 0, len(tracks))
-			for _, t := range tracks {
+			for i, t := range tracks {
 				list = append(list, map[string]any{
 					"id":          trackMetaString(&t, "id"),
+					"index":       i,
+					"isCurrent":   i == s.TrackIndex,
 					"duration":    trackMetaValue(&t, "duration"),
 					"filePath":    t.Path,
 					"songAlbum":   t.Album,

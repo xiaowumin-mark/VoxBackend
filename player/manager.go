@@ -123,12 +123,13 @@ type seekResult struct {
 }
 
 type PlaylistManager struct {
-	ctx         context.Context
-	loadCtx     context.Context
-	cancelLoads context.CancelFunc
-	cfg         Config
-	tracks      []Track
-	emit        func(Event)
+	ctx          context.Context
+	loadCtx      context.Context
+	cancelLoads  context.CancelFunc
+	cfg          Config
+	tracks       []Track
+	sourceTracks []Track
+	emit         func(Event)
 
 	currentIndex int
 	sampleRate   int
@@ -192,6 +193,7 @@ func NewPlaylistManager(ctx context.Context, cfg Config, tracks []Track, sampleR
 		cancelLoads:        cancelLoads,
 		cfg:                cfg,
 		tracks:             cloneTracks(tracks),
+		sourceTracks:       cloneTracks(tracks),
 		currentIndex:       0,
 		sampleRate:         sampleRate,
 		crossfadeSamples:   cf,
@@ -487,7 +489,11 @@ func (pm *PlaylistManager) ClearPlaylist() {
 }
 
 func (pm *PlaylistManager) ShuffleUpcoming() {
-	pm.enqueueCommand(PlayerCmd{Type: CmdShuffleUpcoming})
+	pm.enqueueCommand(PlayerCmd{Type: CmdShuffleUpcoming, Index: -1})
+}
+
+func (pm *PlaylistManager) ShuffleUpcomingFrom(index int) {
+	pm.enqueueCommand(PlayerCmd{Type: CmdShuffleUpcoming, Index: index})
 }
 
 func (pm *PlaylistManager) SetTrack(index int, track Track) {
@@ -567,6 +573,8 @@ func (pm *PlaylistManager) Stream(dst [][2]float64) (int, bool) {
 		pm.mu.Unlock()
 		return len(dst), true
 	}
+
+	pm.ensureSourceRestoredForTailLocked()
 
 	current := pm.current
 	currentPosBefore := pm.currentPos
@@ -692,6 +700,7 @@ func (pm *PlaylistManager) Stream(dst [][2]float64) (int, bool) {
 			pm.next = nil
 			pm.currentPos = pm.nextCrossfadeConsumed
 			pm.nextCrossfadeConsumed = 0
+			pm.compactRestoredSourceLocked()
 			pm.resetStateLocked()
 			pm.emitTrackChanged(pm.current)
 		} else if nextIdx < len(pm.tracks) {
@@ -749,7 +758,9 @@ func (pm *PlaylistManager) processCommandLocked(cmd PlayerCmd) {
 	case CmdAddTracks:
 		wasEmpty := len(pm.tracks) == 0
 		for _, t := range cmd.Tracks {
-			pm.tracks = append(pm.tracks, cloneTrack(t))
+			track := cloneTrack(t)
+			pm.tracks = append(pm.tracks, track)
+			pm.sourceTracks = append(pm.sourceTracks, cloneTrack(t))
 		}
 		if wasEmpty && len(pm.tracks) > 0 {
 			pm.currentIndex = 0
@@ -762,18 +773,44 @@ func (pm *PlaylistManager) processCommandLocked(cmd PlayerCmd) {
 	case CmdClearPlaylist:
 		pm.handleClearPlaylistLocked()
 	case CmdShuffleUpcoming:
-		n := len(pm.tracks) - pm.currentIndex - 1
+		shuffleAfter := pm.currentIndex
+		if cmd.Index >= 0 && cmd.Index < len(pm.tracks) {
+			if pm.current == nil || sameTrackIdentity(pm.current.track, pm.tracks[cmd.Index]) {
+				shuffleAfter = cmd.Index
+				pm.currentIndex = cmd.Index
+				if pm.current != nil {
+					pm.current.index = cmd.Index
+				}
+			}
+		}
+		n := len(pm.tracks) - shuffleAfter - 1
 		if n >= 2 {
-			upcoming := pm.tracks[pm.currentIndex+1:]
+			pm.invalidatePendingLoadsLocked()
+			if pm.next != nil {
+				pm.next.Close()
+				pm.next = nil
+				pm.drainReadyChannelsLocked()
+			}
+			upcoming := pm.tracks[shuffleAfter+1:]
+			var sourceUpcoming []Track
+			if len(pm.sourceTracks) == len(pm.tracks) {
+				sourceUpcoming = pm.sourceTracks[shuffleAfter+1:]
+			}
 			for i := n - 1; i > 0; i-- {
 				j := rand.Intn(i + 1)
 				upcoming[i], upcoming[j] = upcoming[j], upcoming[i]
+				if sourceUpcoming != nil {
+					sourceUpcoming[i], sourceUpcoming[j] = sourceUpcoming[j], sourceUpcoming[i]
+				}
 			}
 			pm.emitPlaylistChanged()
 		}
 	case CmdSetTrack:
 		if cmd.Index >= 0 && cmd.Index < len(pm.tracks) {
 			pm.tracks[cmd.Index] = cloneTrack(cmd.Track)
+			if len(pm.sourceTracks) == len(pm.tracks) {
+				pm.sourceTracks[cmd.Index] = cloneTrack(cmd.Track)
+			}
 		}
 		pm.emitPlaylistChanged()
 	case CmdSetTrackMeta:
@@ -782,6 +819,12 @@ func (pm *PlaylistManager) processCommandLocked(cmd PlayerCmd) {
 				pm.tracks[cmd.Index].Meta = make(map[string]any)
 			}
 			pm.tracks[cmd.Index].Meta[cmd.MetaKey] = cmd.MetaValue
+			if len(pm.sourceTracks) == len(pm.tracks) {
+				if pm.sourceTracks[cmd.Index].Meta == nil {
+					pm.sourceTracks[cmd.Index].Meta = make(map[string]any)
+				}
+				pm.sourceTracks[cmd.Index].Meta[cmd.MetaKey] = cmd.MetaValue
+			}
 		}
 		pm.emitPlaylistChanged()
 	}
@@ -791,6 +834,7 @@ func (pm *PlaylistManager) handleRemoveTrackLocked(index int) {
 	if index < 0 || index >= len(pm.tracks) {
 		return
 	}
+	sourceMatchesQueue := len(pm.sourceTracks) == len(pm.tracks)
 	pm.invalidatePendingLoadsLocked()
 
 	if pm.current != nil && index == pm.currentIndex {
@@ -806,6 +850,9 @@ func (pm *PlaylistManager) handleRemoveTrackLocked(index int) {
 	}
 
 	pm.tracks = append(pm.tracks[:index], pm.tracks[index+1:]...)
+	if sourceMatchesQueue {
+		pm.sourceTracks = append(pm.sourceTracks[:index], pm.sourceTracks[index+1:]...)
+	}
 
 	if index < pm.currentIndex {
 		pm.currentIndex--
@@ -828,9 +875,11 @@ func (pm *PlaylistManager) handleRemoveTrackLocked(index int) {
 }
 
 func (pm *PlaylistManager) handleMoveTrackLocked(from, to int) {
-	if from < 0 || from >= len(pm.tracks) || to < 0 || to >= len(pm.tracks) || from == to {
+	if from < 0 || from >= len(pm.tracks) || to < 0 || to > len(pm.tracks) || from == to {
 		return
 	}
+	sourceMatchesQueue := len(pm.sourceTracks) == len(pm.tracks)
+	originalTo := to
 	pm.invalidatePendingLoadsLocked()
 
 	t := pm.tracks[from]
@@ -839,6 +888,9 @@ func (pm *PlaylistManager) handleMoveTrackLocked(from, to int) {
 		to--
 	}
 	pm.tracks = append(pm.tracks[:to], append([]Track{t}, pm.tracks[to:]...)...)
+	if sourceMatchesQueue {
+		pm.sourceTracks = moveTrackInSlice(pm.sourceTracks, from, originalTo)
+	}
 
 	if from == pm.currentIndex {
 		pm.currentIndex = to
@@ -864,6 +916,66 @@ func (pm *PlaylistManager) handleMoveTrackLocked(from, to int) {
 	pm.emitPlaylistChanged()
 }
 
+func (pm *PlaylistManager) ensureSourceRestoredForTailLocked() {
+	if pm.current == nil || len(pm.sourceTracks) == 0 {
+		return
+	}
+	if pm.currentIndex < 0 || pm.currentIndex < len(pm.tracks)-1 {
+		return
+	}
+	pm.tracks = append(pm.tracks, cloneTracks(pm.sourceTracks)...)
+	pm.emitPlaylistChanged()
+}
+
+func (pm *PlaylistManager) compactRestoredSourceLocked() {
+	if pm.current == nil || len(pm.sourceTracks) == 0 || pm.currentIndex < len(pm.sourceTracks) {
+		return
+	}
+	sourceIndex := pm.currentIndex % len(pm.sourceTracks)
+	if !sameTrackIdentity(pm.current.track, pm.sourceTracks[sourceIndex]) {
+		sourceIndex = -1
+		for i, t := range pm.sourceTracks {
+			if sameTrackIdentity(pm.current.track, t) {
+				sourceIndex = i
+				break
+			}
+		}
+	}
+	if sourceIndex < 0 {
+		return
+	}
+	pm.tracks = cloneTracks(pm.sourceTracks)
+	pm.currentIndex = sourceIndex
+	pm.current.index = sourceIndex
+	pm.emitPlaylistChanged()
+}
+
+func moveTrackInSlice(src []Track, from, to int) []Track {
+	if from < 0 || from >= len(src) || to < 0 || to > len(src) || from == to {
+		return src
+	}
+	t := src[from]
+	dst := append(src[:from], src[from+1:]...)
+	if to > from {
+		to--
+	}
+	return append(dst[:to], append([]Track{t}, dst[to:]...)...)
+}
+
+func sameTrackIdentity(a, b Track) bool {
+	if a.Path != "" && a.Path == b.Path {
+		return true
+	}
+	if a.Meta != nil && b.Meta != nil {
+		aID, aOK := a.Meta["id"]
+		bID, bOK := b.Meta["id"]
+		if aOK && bOK && fmt.Sprint(aID) == fmt.Sprint(bID) {
+			return true
+		}
+	}
+	return false
+}
+
 func (pm *PlaylistManager) handleClearPlaylistLocked() {
 	pm.invalidatePendingLoadsLocked()
 	if pm.current != nil {
@@ -876,6 +988,7 @@ func (pm *PlaylistManager) handleClearPlaylistLocked() {
 	}
 	pm.drainReadyChannelsLocked()
 	pm.tracks = nil
+	pm.sourceTracks = nil
 	pm.currentIndex = 0
 	pm.pendingHardCutIdx = -1
 	pm.needsLoad = false
@@ -916,6 +1029,7 @@ func (pm *PlaylistManager) consumeHardCutResult(result bundleResult) {
 	pm.loadingNext.Store(false)
 	pm.currentPos = 0
 	pm.tracks[result.index].Duration = samplesToDuration(result.bundle.totalSample, pm.sampleRate)
+	pm.compactRestoredSourceLocked()
 	pm.emitTrackChanged(result.bundle)
 }
 

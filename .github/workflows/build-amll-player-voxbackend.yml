@@ -1,0 +1,166 @@
+name: Build AMLL Player VoxBackend
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - ".github/workflows/build-amll-player-voxbackend.yml"
+      - "Amll-Player-Voxbackend/**"
+      - "amll-ws-client/**"
+      - "audio/**"
+      - "dsp/**"
+      - "player/**"
+      - "separator/**"
+      - "go.mod"
+      - "go.sum"
+      - "*.go"
+  pull_request:
+    paths:
+      - ".github/workflows/build-amll-player-voxbackend.yml"
+      - "Amll-Player-Voxbackend/**"
+      - "amll-ws-client/**"
+      - "audio/**"
+      - "dsp/**"
+      - "player/**"
+      - "separator/**"
+      - "go.mod"
+      - "go.sum"
+      - "*.go"
+
+env:
+  GO_VERSION: "1.25.1"
+  ORT_VERSION: "1.25.1"
+  ORT_URL: "https://github.com/microsoft/onnxruntime/releases/download/v1.25.1/onnxruntime-win-x64-1.25.1.zip"
+  UMXL_VOCALS_URL: "https://huggingface.co/chinedudave06/demucs-onnx/resolve/main/umxl_vocals.onnx"
+  KARA2_URL: "https://huggingface.co/seanghay/uvr_models/resolve/main/UVR_MDXNET_KARA_2.onnx"
+  APP_NAME: "VoxBackend-AMLL"
+
+jobs:
+  build-windows:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout VoxBackend
+        uses: actions/checkout@v4
+        with:
+          path: VoxBackend
+
+      - name: Checkout FluxUI sibling dependency
+        uses: actions/checkout@v4
+        with:
+          repository: xiaowumin-mark/FluxUI
+          path: FluxUI
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: VoxBackend/go.sum
+
+      - name: Install gogio
+        working-directory: VoxBackend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          go install gioui.org/cmd/gogio@latest
+          $goBin = Join-Path (go env GOPATH) "bin"
+          $goBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build FluxUI app with gogio
+        working-directory: VoxBackend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path ".build" | Out-Null
+          gogio -target windows -o ".build\VoxBackend-AMLL.exe" ".\Amll-Player-Voxbackend"
+          if (-not (Test-Path ".build\VoxBackend-AMLL.exe")) {
+            throw "gogio build did not produce .build\VoxBackend-AMLL.exe"
+          }
+
+      - name: Download ONNX Runtime and bundled models
+        working-directory: VoxBackend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path ".downloads" | Out-Null
+
+          $ortZip = ".downloads\onnxruntime-win-x64-$env:ORT_VERSION.zip"
+          curl.exe -L --fail --retry 5 --retry-delay 5 -o $ortZip $env:ORT_URL
+          Expand-Archive -Path $ortZip -DestinationPath ".downloads\onnxruntime" -Force
+
+          $runtimeRoot = Get-ChildItem ".downloads\onnxruntime" -Directory |
+            Where-Object { $_.Name -like "onnxruntime-win-x64-*" } |
+            Select-Object -First 1
+          if (-not $runtimeRoot) {
+            throw "Cannot find extracted ONNX Runtime directory"
+          }
+          if (-not (Test-Path (Join-Path $runtimeRoot.FullName "lib\onnxruntime.dll"))) {
+            throw "Cannot find ONNX Runtime DLL in extracted archive"
+          }
+
+          New-Item -ItemType Directory -Force -Path ".downloads\models" | Out-Null
+          curl.exe -L --fail --retry 5 --retry-delay 5 -o ".downloads\models\umxl_vocals.onnx" $env:UMXL_VOCALS_URL
+          curl.exe -L --fail --retry 5 --retry-delay 5 -o ".downloads\models\UVR_MDXNET_KARA_2.onnx" $env:KARA2_URL
+
+          if (-not (Test-Path ".downloads\models\umxl_vocals.onnx")) {
+            throw "umxl_vocals.onnx was not downloaded"
+          }
+          if (-not (Test-Path ".downloads\models\UVR_MDXNET_KARA_2.onnx")) {
+            throw "UVR_MDXNET_KARA_2.onnx was not downloaded"
+          }
+
+      - name: Package release zip
+        working-directory: VoxBackend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packageRoot = "dist\$env:APP_NAME"
+          $zipPath = "dist\$env:APP_NAME-windows-x64.zip"
+          Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+
+          New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
+          Copy-Item ".build\VoxBackend-AMLL.exe" (Join-Path $packageRoot "VoxBackend-AMLL.exe") -Force
+
+          $runtimeRoot = Get-ChildItem ".downloads\onnxruntime" -Directory |
+            Where-Object { $_.Name -like "onnxruntime-win-x64-*" } |
+            Select-Object -First 1
+          $runtimePath = $runtimeRoot.FullName
+          Copy-Item $runtimePath (Join-Path $packageRoot "onnxruntime") -Recurse -Force
+
+          New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot "onnx") | Out-Null
+          Copy-Item ".downloads\models\umxl_vocals.onnx" (Join-Path $packageRoot "onnx\umxl_vocals.onnx") -Force
+          Copy-Item ".downloads\models\UVR_MDXNET_KARA_2.onnx" (Join-Path $packageRoot "onnx\UVR_MDXNET_KARA_2.onnx") -Force
+
+          $readme = @"
+          VoxBackend AMLL Player Windows x64
+
+          Run VoxBackend-AMLL.exe from this folder.
+
+          Bundled default paths used by the app:
+          - ONNX Runtime: .\onnxruntime\lib\onnxruntime.dll
+          - Default model: .\onnx\umxl_vocals.onnx
+
+          Bundled ONNX models:
+          - .\onnx\umxl_vocals.onnx
+          - .\onnx\UVR_MDXNET_KARA_2.onnx
+          "@
+          $readme.Trim() | Set-Content -Path (Join-Path $packageRoot "README.txt") -Encoding utf8
+
+          Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zipPath -Force
+          if (-not (Test-Path $zipPath)) {
+            throw "Package zip was not created"
+          }
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoxBackend-AMLL-windows-x64
+          path: VoxBackend/dist/VoxBackend-AMLL-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30

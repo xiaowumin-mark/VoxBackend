@@ -1,6 +1,7 @@
 const { useAtom, useAtomValue } = Jotai
 import { VoxBackendStates } from './store.jsx'
-import { GetPlaylists } from './db.jsx'
+import { GetPlaylists, SyncPlaylistToBackend } from './db.jsx'
+import { GetIo } from './ws.jsx'
 const { Text, Heading, Card, Flex, Slider, TextField, Switch, Select, Badge, Button } = RadixTheme
 const { useEffect, useRef, useState } = React
 function Setting() {
@@ -232,8 +233,16 @@ function PlaylistSelect({ nowPlayListName, setNowPlayListName }) {
         GetPlaylists().then(setPlaylists);
     }, []);
 
+    const handleValueChange = (name) => {
+        setNowPlayListName(name);
+        const io = GetIo();
+        if (!io?.connected) return;
+        SyncPlaylistToBackend(io, name)
+            .catch(err => console.error("Failed to sync VoxBackend playlist", err));
+    };
+
     return (
-        <Select.Root defaultValue={nowPlayListName} onValueChange={setNowPlayListName}>
+        <Select.Root defaultValue={nowPlayListName} onValueChange={handleValueChange}>
             <Select.Trigger placeholder="选择歌单" />
             <Select.Content>
                 {playlists.map(pl => (

@@ -152,6 +152,10 @@ func StartServer(addr string) {
 		})
 		socket.On("shuffle-upcoming", func(event *socketio.EventPayload) {
 			if Player != nil {
+				if idx, ok := shuffleCurrentIndex(event); ok {
+					Player.ShuffleUpcomingFrom(idx)
+					return
+				}
 				Player.ShuffleUpcoming()
 			}
 		})
@@ -243,6 +247,45 @@ func payloadString(event *socketio.EventPayload, index int) (string, bool) {
 	}
 	s, ok := v.(string)
 	return s, ok
+}
+
+func shuffleCurrentIndex(event *socketio.EventPayload) (int, bool) {
+	data, ok := payloadAt(event, 0)
+	if !ok {
+		return -1, false
+	}
+	payload, ok := data.(map[string]interface{})
+	if !ok {
+		return -1, false
+	}
+	v, ok := payload["currentIndex"]
+	if !ok {
+		return -1, false
+	}
+	idx, ok := numberToInt(v)
+	if !ok || idx < 0 {
+		return -1, false
+	}
+	return idx, true
+}
+
+func numberToInt(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case float32:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case string:
+		var idx int
+		if _, err := fmt.Sscanf(n, "%d", &idx); err == nil {
+			return idx, true
+		}
+	}
+	return -1, false
 }
 
 func songString(song map[string]interface{}, key string) string {

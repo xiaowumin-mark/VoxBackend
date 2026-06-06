@@ -238,15 +238,16 @@ func (p *Player) RemoveTrack(index int) {
 
 func (p *Player) MoveTrack(from, to int) {
 	p.updateConfig(func(cfg *Config) {
-		if from < 0 || from >= len(cfg.Tracks) || to < 0 || to >= len(cfg.Tracks) || from == to {
+		if from < 0 || from >= len(cfg.Tracks) || to < 0 || to > len(cfg.Tracks) || from == to {
 			return
 		}
 		t := cfg.Tracks[from]
 		cfg.Tracks = append(cfg.Tracks[:from], cfg.Tracks[from+1:]...)
-		if to > from {
-			to--
+		insertAt := to
+		if insertAt > from {
+			insertAt--
 		}
-		cfg.Tracks = append(cfg.Tracks[:to], append([]Track{t}, cfg.Tracks[to:]...)...)
+		cfg.Tracks = append(cfg.Tracks[:insertAt], append([]Track{t}, cfg.Tracks[insertAt:]...)...)
 	})
 	manager, _ := p.managerSnapshot()
 	if manager != nil {
@@ -266,6 +267,13 @@ func (p *Player) ShuffleUpcoming() {
 	manager, _ := p.managerSnapshot()
 	if manager != nil {
 		manager.ShuffleUpcoming()
+	}
+}
+
+func (p *Player) ShuffleUpcomingFrom(index int) {
+	manager, _ := p.managerSnapshot()
+	if manager != nil {
+		manager.ShuffleUpcomingFrom(index)
 	}
 }
 

@@ -56,7 +56,7 @@ func guiApp(ctx *ui.Context, rt *guiRuntime) ui.Element {
 	pickerBusy := ui.UseState(ctx, false)
 	sampler := ui.UseRef(ctx, newResourceSampler())
 
-	ui.UseInterval(ctx, 500*time.Millisecond, func() {
+	ui.UseInterval(ctx, time.Second, func() {
 		if sampler.Current != nil {
 			rt.store.UpdateResources(sampler.Current.Sample())
 		}

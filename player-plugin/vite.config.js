@@ -11,10 +11,19 @@ const amllMeta = `
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import pkg from './package.json'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   plugins: [react({ jsxRuntime: 'classic' })],
+  resolve: {
+    alias: {
+      react: resolve(__dirname, 'src/shims/react-global.js'),
+      'react-dom': resolve(__dirname, 'src/shims/react-dom-global.js'),
+    },
+  },
   esbuild: {
     //drop: ['debugger','console'],
     banner: amllMeta, // 确保这里有明确定义
@@ -41,7 +50,7 @@ export default defineConfig({
       fileName: 'vox-backend v0.0.1' // 与output.entryFileNames二选一
     },
     rollupOptions: {
-      external: ['react', 'jotai'],
+      external: ['jotai'],
       output: {
         entryFileNames: 'vox-backend v0.0.1.js',
         preserveModules: false,
@@ -52,7 +61,7 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    exclude: ['react', 'jotai'] // 确保不优化这些依赖
+    exclude: ['jotai'] // 确保不优化这些依赖
   }
 
 })
